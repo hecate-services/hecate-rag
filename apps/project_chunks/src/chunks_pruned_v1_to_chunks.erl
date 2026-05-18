@@ -1,6 +1,9 @@
-%%% @doc Projection: chunks_pruned_v1 → chunks read model.
+%%% @doc Projection: `chunks_pruned_v1' → `chunks' read model.
 %%%
-%%% Subscribes to chunks_pruned_v1 via pg, writes to the SQLite `chunks` table.
+%%% Deletes the listed chunk ids from `rag_store'. The vector index
+%%% lingers (no delete primitive in hecate_vector yet); only the
+%%% SQL row goes away. Searches that hit the orphan vector get a
+%%% null content and are filtered by `rag_store:enrich/3'.
 -module(chunks_pruned_v1_to_chunks).
 -behaviour(gen_server).
 
@@ -17,15 +20,29 @@ init([]) ->
     pg:join(?PG_SCOPE, ?EVENT_TOPIC, self()),
     {ok, #{}}.
 
-handle_call(_Msg, _From, State) -> {reply, ok, State}.
-handle_cast(_Msg, State)         -> {noreply, State}.
+handle_call(_, _, S) -> {reply, ok, S}.
+handle_cast(_, S)    -> {noreply, S}.
 
-handle_info({evoq_event, Envelope}, State) ->
-    %% TODO: read event payload from Envelope, upsert into `chunks` table.
-    %% Use esqlite via app_ragd_paths:sqlite_db/0.
-    _ = Envelope,
-    {noreply, State};
-handle_info(_Other, State) ->
-    {noreply, State}.
+handle_info({evoq_event, Envelope}, S) ->
+    project(Envelope),
+    {noreply, S};
+handle_info(_, S) ->
+    {noreply, S}.
 
-terminate(_Reason, _State) -> ok.
+terminate(_, _) -> ok.
+
+%%% Internals
+
+project(#{data := D}) -> project_data(D);
+project(D) when is_map(D) -> project_data(D);
+project(_) -> ok.
+
+project_data(#{chunk_ids := Ids}) when is_list(Ids) ->
+    lists:foreach(fun(Id) -> safe_forget(Id) end, Ids);
+project_data(_) ->
+    ok.
+
+safe_forget(Id) when is_binary(Id) ->
+    rag_store:forget_chunk(Id);
+safe_forget(_) ->
+    ok.

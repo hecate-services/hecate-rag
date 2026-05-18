@@ -1,7 +1,7 @@
 {application, rag, [
     {description, "Shared root + notation for the hecate-rag service's umbrella apps"},
     {vsn, "0.1.0"},
-    {registered, []},
+    {registered, [rag_store]},
     {mod, {rag_app, []}},
     {applications, [
         kernel,
@@ -9,8 +9,11 @@
         crypto,
         cowboy,
         jsx,
+        esqlite,
         reckon_db,
-        evoq
+        evoq,
+        hecate_vector,
+        hecate_embed
     ]},
     {env, []},
     {modules, []},

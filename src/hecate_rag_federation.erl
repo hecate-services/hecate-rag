@@ -130,29 +130,12 @@ safe_register(ShardId, Fun) ->
 -spec answer_query(map(), map()) -> {ok, [map()]} | {error, term()}.
 answer_query(Query, Opts) when is_map(Query), is_map(Opts) ->
     TopK = maps:get(top_k, Opts, 10),
-    Params = Query#{<<"top_k">> => TopK,
-                    <<"query_id">> => generate_id()},
-    case answer_query_v1:from_map(Params) of
-        {ok, Cmd} ->
-            case maybe_answer_query:handle(Cmd) of
-                {ok, _Events} ->
-                    %% Today: handler returns the produced events.
-                    %% Real implementation will populate `hits' via a
-                    %% local hecate_vector search; for now, empty.
-                    %% TODO: query the chunks read model + return hits.
-                    {ok, []};
-                {error, _} = E ->
-                    E
-            end;
-        {error, _} = E ->
-            E
-    end;
+    %% Federation contract: macula_rag passes the inbound query map
+    %% straight from the caller. We forward it to the search desk,
+    %% which embeds the query text + walks the vector index +
+    %% enriches hits with content. No event store dispatch on the
+    %% federation path — those are read-only queries.
+    Params = Query#{<<"top_k">> => TopK},
+    maybe_answer_query:retrieve(Params);
 answer_query(_, _) ->
     {error, bad_query}.
-
-generate_id() ->
-    iolist_to_binary([
-        integer_to_binary(erlang:system_time(microsecond)),
-        $-,
-        integer_to_binary(rand:uniform(16#FFFFFFFF), 16)
-    ]).

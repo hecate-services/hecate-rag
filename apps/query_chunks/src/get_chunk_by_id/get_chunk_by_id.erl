@@ -1,9 +1,11 @@
-%%% @doc Query desk: get_chunk_by_id. Looks up by id from the read model.
+%%% @doc Query desk: get_chunk_by_id. Looks up by id from the read
+%%% model (delegates to rag_store).
 -module(get_chunk_by_id).
 
 -export([handle/1]).
 
--spec handle(binary()) -> {ok, map()} | {error, term()}.
-handle(_Id) ->
-    %% TODO: SELECT from SQLite read model via esqlite.
-    {error, not_implemented}.
+-spec handle(binary() | undefined) -> {ok, map()} | {error, term()}.
+handle(Id) when is_binary(Id) ->
+    rag_store:get(Id);
+handle(_) ->
+    {error, missing_id}.
