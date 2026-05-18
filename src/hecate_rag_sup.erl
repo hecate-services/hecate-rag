@@ -4,8 +4,10 @@
 %%% single umbrella app:
 %%%   - Cowboy HTTP listener (serves /health from hecate_om plus the
 %%%     per-slice admin/debug routes under /api/v1/*)
-%%%   - hecate_rag_mesh_rpc: registers the RPC handlers that back
-%%%     the capabilities advertised by hecate_rag_service:capabilities/0
+%%%   - hecate_rag_mesh_rpc: registers the per-capability RPC
+%%%     handlers (one-method-per-handler form, see module doc)
+%%%   - hecate_rag_federation: configures macula_rag with the local
+%%%     pool+realm and registers the federation responder callback
 %%%
 %%% The umbrella apps (embed_corpus, refresh_corpus, …) start
 %%% themselves via their entries in hecate_rag.app.src.
@@ -26,16 +28,20 @@ init([]) ->
     },
     Children = [
         cowboy_child(),
-        #{
-            id       => hecate_rag_mesh_rpc,
-            start    => {hecate_rag_mesh_rpc, start_link, []},
-            restart  => permanent,
-            shutdown => 5000,
-            type     => worker,
-            modules  => [hecate_rag_mesh_rpc]
-        }
+        worker(hecate_rag_mesh_rpc),
+        worker(hecate_rag_federation)
     ],
     {ok, {SupFlags, Children}}.
+
+worker(Mod) ->
+    #{
+        id       => Mod,
+        start    => {Mod, start_link, []},
+        restart  => permanent,
+        shutdown => 5000,
+        type     => worker,
+        modules  => [Mod]
+    }.
 
 %%% Internal
 
