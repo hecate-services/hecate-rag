@@ -1,0 +1,35 @@
+{application, hecate_rag, [
+    {description, "Realm-bound RAG service daemon"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {hecate_rag_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        crypto,
+        cowboy,
+        reckon_db,
+        reckon_gater,
+        evoq,
+        reckon_evoq,
+        esqlite,
+        hecate_om,
+        hecate_vector,
+        hecate_embed,
+        macula_rag,
+        rag,
+        embed_corpus,
+        refresh_corpus,
+        serve_retrieval,
+        project_chunks,
+        project_sources,
+        query_chunks,
+        query_sources
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [
+        {"Codeberg", "https://codeberg.org/hecate-services/hecate-rag"}
+    ]}
+]}.

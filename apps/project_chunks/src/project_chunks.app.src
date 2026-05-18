@@ -1,0 +1,19 @@
+{application, project_chunks, [
+    {description, "Project chunk-relevant events into the chunks read model (PRJ)"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {project_chunks_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        crypto,
+        esqlite,
+        reckon_db,
+        evoq,
+        reckon_evoq,
+        rag
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]}
+]}.

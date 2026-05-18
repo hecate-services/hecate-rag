@@ -1,0 +1,18 @@
+{application, rag, [
+    {description, "Shared root + notation for the hecate-rag service's umbrella apps"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {rag_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        crypto,
+        cowboy,
+        jsx,
+        reckon_db,
+        evoq
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]}
+]}.
