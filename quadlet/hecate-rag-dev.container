@@ -1,0 +1,49 @@
+# Quadlet unit for hecate-rag — LOCAL DEV variant.
+#
+# Differences from `hecate-rag.container`:
+#   - No macula-station requirement (no mesh, no realm-bound auth)
+#   - No realm-cert mount
+#   - Runs under `systemd --user` (not system-wide)
+#   - Bind-mounts a corpus directory and writes state under $HOME
+#   - Uses `network=host` so it can reach the host Ollama on :11434
+#
+# Install:
+#   ln -sfn $PWD/quadlet/hecate-rag-dev.container \
+#           ~/.config/containers/systemd/hecate-rag-dev.container
+#   systemctl --user daemon-reload
+#   systemctl --user start hecate-rag-dev
+#
+# Build the image first:
+#   scripts/build-image.sh   (or `podman build -t localhost/hecate-rag:dev .`)
+
+[Unit]
+Description=Hecate RAG (local dev)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=hecate-rag-dev
+Image=localhost/hecate-rag:dev
+
+# Host network so the container can talk to host's Ollama on 127.0.0.1:11434.
+Network=host
+
+# Persistent state (sqlite chunks db + vector index snapshot).
+Volume=%h/.hecate/hecate-rag-dev:/var/lib/hecate-rag
+
+# Read-only corpus mount. Override CORPUS_DIR in env file if you want
+# a different default location.
+Volume=%h/work/codeberg.org/hecate-social/hecate-corpus:/corpus:ro
+
+# Add env overrides here if you need them. Quadlet's EnvironmentFile
+# does NOT support systemd's `-` optional prefix, so the file must
+# exist if uncommented:
+#   touch %h/.hecate/hecate-rag-dev/env
+# EnvironmentFile=%h/.hecate/hecate-rag-dev/env
+
+[Service]
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target
