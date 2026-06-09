@@ -188,9 +188,21 @@ genuinely hard parts are routing precision, cross-shard fusion, and trust.
   daemon embed it.
 - **Routing signal.** Bloom-of-topics only, or Bloom + semantic centroids?
   (Recommend the latter for precision.)
-- **Trust model.** Permissionless-with-reputation, realm-allowlist-only, or a
-  hybrid (open discovery, realm decides what to trust)? This is the defining
-  governance choice for a "mesh of knowledge."
+- **Trust model — DECIDED (2026-06-09): open discovery, realm decides trust.**
+  Any shard may advertise its summary on the mesh and be discovered by anyone
+  (discovery is permissionless). Trust is a separate, realm-scoped decision: a
+  realm gates which discovered shards it will actually query and whose passages
+  it will accept, via a trust policy over Layer-1 principals (allowlist +
+  reputation + realm-issued attestations). Discovery ≠ trust. Implications:
+  - The router fans queries only to shards that pass the realm's trust filter;
+    untrusted shards remain discoverable but are excluded or down-weighted.
+  - **Provenance is therefore mandatory, not optional** — the realm can only
+    decide trust if every passage is attributable to its shard principal
+    (source → ingest event → curator). This makes the provenance/lineage work
+    (B2.3) a hard requirement, not a nice-to-have.
+  - Mirrors the staged posture in `philosophy/PLUGIN_SECURITY_MODEL.md`: open
+    now, enforcement at the realm boundary as it matures. Reputation can start
+    as a simple per-principal allowlist and grow into web-of-trust scoring.
 - **Domain descriptor schema.** What exactly does a shard advertise — a free-text
   domain label, a controlled taxonomy, centroids, a corpus merkle-root, supported
   languages? This is the contract every shard and router agrees on; pin it once
