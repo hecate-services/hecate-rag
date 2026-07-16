@@ -30,6 +30,7 @@
     add_chunk/4,
     forget_chunk/1,
     search/2,
+    search_raw/2,
     get/1,
     size/0
 ]).
@@ -64,6 +65,12 @@ forget_chunk(ChunkId) when is_binary(ChunkId) ->
     | {error, term()}.
 search(Vector, TopK) when is_list(Vector), is_integer(TopK), TopK > 0 ->
     gen_server:call(?MODULE, {search, Vector, TopK}).
+
+%% Debug: return the unfiltered hits from the vector index (no enrich pass).
+-spec search_raw([float()], pos_integer()) ->
+    {ok, [{binary(), float()}]} | {error, term()}.
+search_raw(Vector, TopK) when is_list(Vector), is_integer(TopK), TopK > 0 ->
+    gen_server:call(?MODULE, {search_raw, Vector, TopK}).
 
 -spec get(binary()) -> {ok, map()} | {error, not_found}.
 get(ChunkId) when is_binary(ChunkId) ->
@@ -104,16 +111,15 @@ handle_call({forget_chunk, Id}, _From, S0) ->
 handle_call({search, Vec, TopK}, _From, S0) ->
     case ensure_open(S0) of
         {ok, #state{index = Idx, db = Db} = S} ->
-            case hecate_vector:search(Idx, Vec, TopK) of
-                {ok, RawHits} ->
-                    Enriched = lists:filtermap(
-                        fun({Id, Score}) -> enrich(Db, Id, Score) end,
-                        RawHits
-                    ),
-                    {reply, {ok, Enriched}, S};
-                {error, _} = E ->
-                    {reply, E, S}
-            end;
+            reply_search(hecate_vector:search(Idx, Vec, TopK), Db, S);
+        {error, _} = E ->
+            {reply, E, S0}
+    end;
+
+handle_call({search_raw, Vec, TopK}, _From, S0) ->
+    case ensure_open(S0) of
+        {ok, #state{index = Idx} = S} ->
+            {reply, hecate_vector:search(Idx, Vec, TopK), S};
         {error, _} = E ->
             {reply, E, S0}
     end;
@@ -147,11 +153,13 @@ ensure_open(#state{index = Idx, db = Db} = S) when Idx =/= undefined, Db =/= und
     {ok, S};
 ensure_open(#state{dim = Dim} = S) ->
     case open_index(Dim) of
-        {ok, Idx} ->
-            case open_db() of
-                {ok, Db} -> {ok, S#state{index = Idx, db = Db}};
-                {error, _} = E -> E
-            end;
+        {ok, Idx}      -> with_index(Idx, S);
+        {error, _} = E -> E
+    end.
+
+with_index(Idx, S) ->
+    case open_db() of
+        {ok, Db}       -> {ok, S#state{index = Idx, db = Db}};
         {error, _} = E -> E
     end.
 
@@ -183,10 +191,10 @@ run_migration(Db) ->
         "  meta         TEXT,"  %% JSON-encoded
         "  added_at_ms  INTEGER NOT NULL"
         ");",
-    esqlite3:exec(Sql, Db).
+    esqlite3:exec(Db, Sql).
 
 upsert_chunk(Db, Id, Content, Meta) ->
-    SourcePath = maps:get(source_path, Meta, <<>>),
+    SourcePath = source_path_bin(Meta),
     MetaJson   = jsx:encode(Meta),
     NowMs      = erlang:system_time(millisecond),
     Sql =
@@ -197,13 +205,13 @@ upsert_chunk(Db, Id, Content, Meta) ->
         "  source_path = excluded.source_path,"
         "  meta        = excluded.meta,"
         "  added_at_ms = excluded.added_at_ms;",
-    case esqlite3:q(Sql, [Id, Content, SourcePath, MetaJson, NowMs], Db) of
+    case esqlite3:q(Db, Sql, [Id, Content, SourcePath, MetaJson, NowMs]) of
         {error, _} = E -> E;
         _              -> ok
     end.
 
 delete_chunk(Db, Id) ->
-    case esqlite3:q("DELETE FROM chunks WHERE chunk_id = ?1", [Id], Db) of
+    case esqlite3:q(Db, "DELETE FROM chunks WHERE chunk_id = ?1", [Id]) of
         {error, _} = E -> E;
         _              -> ok
     end.
@@ -216,15 +224,31 @@ enrich(Db, Id, Score) ->
 
 get_chunk(Db, Id) ->
     Sql = "SELECT chunk_id, content, source_path, meta FROM chunks WHERE chunk_id = ?1",
-    case esqlite3:q(Sql, [Id], Db) of
-        [{IdB, Content, SourcePath, MetaJson}] ->
-            Meta = try jsx:decode(MetaJson, [return_maps]) catch _:_ -> #{} end,
-            {ok, #{
-                chunk_id    => IdB,
-                content     => Content,
-                source_path => SourcePath,
-                meta        => Meta
-            }};
+    case esqlite3:q(Db, Sql, [Id]) of
+        [[IdB, Content, SourcePath, MetaJson]] ->
+            {ok, chunk_row(IdB, Content, SourcePath, MetaJson)};
         _ ->
             {error, not_found}
     end.
+
+chunk_row(IdB, Content, SourcePath, MetaJson) ->
+    #{chunk_id    => IdB,
+      content     => Content,
+      source_path => SourcePath,
+      meta        => decode_meta(MetaJson)}.
+
+decode_meta(MetaJson) ->
+    try jsx:decode(MetaJson, [return_maps]) catch _:_ -> #{} end.
+
+reply_search({ok, RawHits}, Db, S) ->
+    Enriched = lists:filtermap(fun({Id, Score}) -> enrich(Db, Id, Score) end, RawHits),
+    logger:debug("[rag_store] search raw=~p enriched=~p",
+                 [length(RawHits), length(Enriched)]),
+    {reply, {ok, Enriched}, S};
+reply_search({error, _} = E, _Db, S) ->
+    {reply, E, S}.
+
+%% Meta may carry source_path under either an atom or a binary key,
+%% depending on whether it was built in code or round-tripped via JSON.
+source_path_bin(Meta) ->
+    maps:get(source_path, Meta, maps:get(<<"source_path">>, Meta, <<>>)).

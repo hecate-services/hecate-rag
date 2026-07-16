@@ -72,19 +72,17 @@ terminate(_Reason, _State) -> ok.
 
 advertise_all() ->
     case {hecate_om:macula_client(), hecate_om_identity:realm()} of
-        {{ok, Pool}, {ok, Realm}} ->
-            lists:foreach(
-                fun({CapName, Handler}) ->
-                    try
-                        ok = macula:advertise(Pool, Realm, CapName,
-                                              {?MODULE, Handler}, #{})
-                    catch _:_ -> ok
-                    end
-                end,
-                handler_table()
-            );
-        _ ->
-            ok
+        {{ok, Pool}, {ok, Realm}} -> advertise_each(Pool, Realm);
+        _                         -> ok
+    end.
+
+advertise_each(Pool, Realm) ->
+    lists:foreach(fun(Entry) -> advertise_one(Pool, Realm, Entry) end, handler_table()).
+
+advertise_one(Pool, Realm, {CapName, Handler}) ->
+    try
+        ok = macula:advertise(Pool, Realm, CapName, {?MODULE, Handler}, #{})
+    catch _:_ -> ok
     end.
 
 handler_table() ->
@@ -141,12 +139,10 @@ route(Other, _P) ->
 
 delegate(CmdMod, HandlerMod, Params) ->
     case CmdMod:from_map(Params) of
-        {ok, Cmd} ->
-            case HandlerMod:dispatch(Cmd) of
-                ok                  -> {ok, #{status => accepted}};
-                {ok, Result}        -> {ok, Result};
-                {error, _} = E      -> E
-            end;
-        {error, _} = E ->
-            E
+        {ok, Cmd}      -> dispatched(HandlerMod:dispatch(Cmd));
+        {error, _} = E -> E
     end.
+
+dispatched(ok)             -> {ok, #{status => accepted}};
+dispatched({ok, Result})   -> {ok, Result};
+dispatched({error, _} = E) -> E.

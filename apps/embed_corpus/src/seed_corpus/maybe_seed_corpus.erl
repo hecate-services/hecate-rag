@@ -123,30 +123,31 @@ ingest_file(AbsPath, RootDir, Model, Acc0) ->
         {ok, []} ->
             bump(skipped, Acc0);
         {ok, Chunks} ->
-            lists:foldl(
-                fun(C, Acc) -> embed_and_store(C, Model, Acc) end,
-                Acc0,
-                Chunks
-            );
+            fold_chunks(Chunks, Model, Acc0);
         {error, Reason} ->
             logger:warning("[seed_corpus] read error: ~ts ~p", [AbsPath, Reason]),
             bump(skipped, Acc0)
     end.
 
+fold_chunks(Chunks, Model, Acc0) ->
+    lists:foldl(fun(C, Acc) -> embed_and_store(C, Model, Acc) end, Acc0, Chunks).
+
 embed_and_store(Chunk, Model, Acc) ->
     #{chunk_id := Id, content := Content} = Chunk,
     Meta = maps:without([chunk_id, content], Chunk),
     case hecate_embed:embed(Model, Content) of
-        {ok, Vec} ->
-            case rag_store:add_chunk(Id, Content, Vec, Meta) of
-                ok ->
-                    bump([chunks, embeds], Acc);
-                {error, Reason} ->
-                    logger:warning("[seed_corpus] store error chunk=~s ~p", [Id, Reason]),
-                    bump([chunks, embed_errors], Acc)
-            end;
+        {ok, Vec}       -> store_chunk(Id, Content, Vec, Meta, Acc);
         {error, Reason} ->
             logger:warning("[seed_corpus] embed error chunk=~s ~p", [Id, Reason]),
+            bump([chunks, embed_errors], Acc)
+    end.
+
+store_chunk(Id, Content, Vec, Meta, Acc) ->
+    case rag_store:add_chunk(Id, Content, Vec, Meta) of
+        ok ->
+            bump([chunks, embeds], Acc);
+        {error, Reason} ->
+            logger:warning("[seed_corpus] store error chunk=~s ~p", [Id, Reason]),
             bump([chunks, embed_errors], Acc)
     end.
 

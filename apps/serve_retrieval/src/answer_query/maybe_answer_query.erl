@@ -25,10 +25,7 @@ handle(Cmd, _State) ->
         ok ->
             QueryText = answer_query_v1:get_query_text(Cmd),
             TopK      = answer_query_v1:get_top_k(Cmd),
-            Hits = case do_search(QueryText, TopK) of
-                {ok, H} -> H;
-                _       -> []
-            end,
+            Hits      = search_hits(QueryText, TopK),
             {ok, Event} = query_answered_v1:new(#{
                 query_id   => answer_query_v1:get_query_id(Cmd),
                 query_text => QueryText,
@@ -38,6 +35,12 @@ handle(Cmd, _State) ->
             {ok, [Event]};
         {error, R} ->
             {error, R}
+    end.
+
+search_hits(QueryText, TopK) ->
+    case do_search(QueryText, TopK) of
+        {ok, H} -> H;
+        _       -> []
     end.
 
 %% @doc Convenience entry for callers that don't care about the

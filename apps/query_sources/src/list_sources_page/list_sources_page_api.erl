@@ -9,13 +9,12 @@ init(Req0, _State) ->
     case cowboy_req:method(Req0) of
         <<"GET">> ->
             Params = maps:from_list(cowboy_req:parse_qs(Req0)),
-            case list_sources_page:handle(Params) of
-                {ok, Items} ->
-                    hecate_rag_http:ok_json(#{items => Items}, Req0);
-                {error, Reason} ->
-                    hecate_rag_http:bad_request(
-                        iolist_to_binary(io_lib:format("~p", [Reason])), Req0)
-            end;
+            respond(list_sources_page:handle(Params), Req0);
         _ ->
             hecate_rag_http:method_not_allowed(Req0)
     end.
+
+respond({ok, Items}, Req0) ->
+    hecate_rag_http:ok_json(#{items => Items}, Req0);
+respond({error, Reason}, Req0) ->
+    hecate_rag_http:bad_request(iolist_to_binary(io_lib:format("~p", [Reason])), Req0).

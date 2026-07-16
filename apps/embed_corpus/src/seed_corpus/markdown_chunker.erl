@@ -154,20 +154,24 @@ split_section(RelPath, HeaderPath, StartLine, NumberedLines, Kind, MaxChars) ->
     %% Lines are {N, Bin}. Render with newlines; carry start/end line.
     case NumberedLines of
         [] -> [];
-        _  ->
-            Body = render_lines(NumberedLines),
-            case byte_size(Body) of
-                Sz when Sz =< MaxChars orelse Kind =:= code ->
-                    case Sz < ?DEFAULT_MIN_CHARS of
-                        true  -> [];  %% skip tiny scraps (lonely headers, blank lines)
-                        false ->
-                            {EndLine, _} = lists:last(NumberedLines),
-                            [chunk(RelPath, HeaderPath, StartLine, EndLine, Body, Kind)]
-                    end;
-                _ ->
-                    split_paragraphs(RelPath, HeaderPath, NumberedLines, MaxChars)
-            end
+        _  -> emit_section(RelPath, HeaderPath, StartLine, NumberedLines, Kind, MaxChars)
     end.
+
+emit_section(RelPath, HeaderPath, StartLine, NumberedLines, Kind, MaxChars) ->
+    Body = render_lines(NumberedLines),
+    Sz   = byte_size(Body),
+    case Sz =< MaxChars orelse Kind =:= code of
+        true  -> keep_or_skip(RelPath, HeaderPath, StartLine, NumberedLines, Body, Kind, Sz);
+        false -> split_paragraphs(RelPath, HeaderPath, NumberedLines, MaxChars)
+    end.
+
+%% Skip tiny scraps (lonely headers, blank lines); otherwise emit one chunk.
+keep_or_skip(_RelPath, _HeaderPath, _StartLine, _NumberedLines, _Body, _Kind, Sz)
+  when Sz < ?DEFAULT_MIN_CHARS ->
+    [];
+keep_or_skip(RelPath, HeaderPath, StartLine, NumberedLines, Body, Kind, _Sz) ->
+    {EndLine, _} = lists:last(NumberedLines),
+    [chunk(RelPath, HeaderPath, StartLine, EndLine, Body, Kind)].
 
 %%% Paragraph splitter: group lines into paragraphs (blank-line
 %%% separated), then pack into chunks under MaxChars.

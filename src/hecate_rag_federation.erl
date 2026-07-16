@@ -74,18 +74,16 @@ terminate(_, _) -> ok.
 maybe_configure(#state{configured = true} = S) -> S;
 maybe_configure(S) ->
     case {hecate_om:macula_client(), hecate_om_identity:realm()} of
-        {{ok, Pool}, {ok, Realm}} ->
-            case safe_configure(Pool, Realm) of
-                ok ->
-                    logger:info("[hecate_rag_federation] macula_rag configured"),
-                    S#state{configured = true};
-                {error, Reason} ->
-                    logger:warning("[hecate_rag_federation] configure failed: ~p", [Reason]),
-                    S
-            end;
-        _ ->
-            S
+        {{ok, Pool}, {ok, Realm}} -> on_configured(safe_configure(Pool, Realm), S);
+        _                         -> S
     end.
+
+on_configured(ok, S) ->
+    logger:info("[hecate_rag_federation] macula_rag configured"),
+    S#state{configured = true};
+on_configured({error, Reason}, S) ->
+    logger:warning("[hecate_rag_federation] configure failed: ~p", [Reason]),
+    S.
 
 maybe_register_responder(#state{configured = false} = S) -> S;
 maybe_register_responder(#state{responder  = true}  = S) -> S;
