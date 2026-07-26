@@ -12,3 +12,4 @@ priv/index/
 *.swp
 .DS_Store
 __pycache__/
+_checkouts_resolved/
