@@ -10,7 +10,7 @@ ROOT="$(cd "$HERE/.." && pwd)"
 
 TAG="${TAG:-localhost/hecate-rag:dev}"
 DATA_DIR="${DATA_DIR:-$HOME/.hecate/hecate-rag-dev}"
-CORPUS_DIR="${CORPUS_DIR:-$HOME/work/codeberg.org/hecate-social/hecate-corpus}"
+CORPUS_DIR="${CORPUS_DIR:-$HOME/work/github.com/hecate-social/hecate-corpus}"
 
 mkdir -p "$DATA_DIR/data" "$DATA_DIR/index"
 

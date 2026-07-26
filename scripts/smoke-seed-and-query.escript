@@ -7,10 +7,10 @@
 %%
 %% Requires:
 %%   - ollama running with nomic-embed-text pulled
-%%   - hecate-corpus cloned at ~/work/codeberg.org/hecate-social/hecate-corpus
+%%   - hecate-corpus cloned at ~/work/github.com/hecate-social/hecate-corpus
 timer:sleep(3000),
 
-CorpusRoot = <<"/home/rl/work/codeberg.org/hecate-social/hecate-corpus/philosophy">>,
+CorpusRoot = <<"/home/rl/work/github.com/hecate-social/hecate-corpus/philosophy">>,
 
 io:format("[1/4] seeding ~ts ...~n", [CorpusRoot]),
 {ok, Stats} = maybe_seed_corpus:seed(#{

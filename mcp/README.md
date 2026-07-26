@@ -28,7 +28,7 @@ Add to `~/.claude/settings.json` (or your project `.mcp.json`):
   "mcpServers": {
     "hecate-rag": {
       "command": "node",
-      "args": ["/home/rl/work/codeberg.org/hecate-services/hecate-rag/mcp/dist/index.js"],
+      "args": ["/home/rl/work/github.com/hecate-services/hecate-rag/mcp/dist/index.js"],
       "env": {
         "HECATE_RAG_URL": "http://127.0.0.1:8470"
       }

@@ -110,7 +110,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           root_dir: {
             type: "string",
             description:
-              "Absolute path INSIDE the hecate-rag container. The dev container bind-mounts ~/work/codeberg.org/hecate-social/hecate-corpus at /corpus.",
+              "Absolute path INSIDE the hecate-rag container. The dev container bind-mounts ~/work/github.com/hecate-social/hecate-corpus at /corpus.",
           },
           seed_id: {
             type: "string",

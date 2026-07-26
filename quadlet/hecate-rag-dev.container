@@ -33,7 +33,7 @@ Volume=%h/.hecate/hecate-rag-dev:/var/lib/hecate-rag
 
 # Read-only corpus mount. Override CORPUS_DIR in env file if you want
 # a different default location.
-Volume=%h/work/codeberg.org/hecate-social/hecate-corpus:/corpus:ro
+Volume=%h/work/github.com/hecate-social/hecate-corpus:/corpus:ro
 
 # Add env overrides here if you need them. Quadlet's EnvironmentFile
 # does NOT support systemd's `-` optional prefix, so the file must
