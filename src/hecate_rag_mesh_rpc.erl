@@ -115,13 +115,13 @@ handle_list_sources_page(P)      -> route(<<"hecate-rag.list_sources_page">>, P)
 %%% Internal: method → slice handler
 
 route(<<"hecate-rag.ingest_document">>, P) ->
-    delegate(ingest_document_v1, maybe_ingest_document, P);
+    maybe_ingest_document:ingest(P);
 route(<<"hecate-rag.embed_document">>, P) ->
-    delegate(embed_document_v1, maybe_embed_document, P);
+    maybe_embed_document:embed(P);
 route(<<"hecate-rag.prune_chunks">>, P) ->
-    delegate(prune_chunks_v1, maybe_prune_chunks, P);
+    maybe_prune_chunks:prune(P);
 route(<<"hecate-rag.answer_query">>, P) ->
-    delegate(answer_query_v1, maybe_answer_query, P);
+    answer_query_result(maybe_answer_query:retrieve(P));
 route(<<"hecate-rag.rerank_results">>, P) ->
     delegate(rerank_results_v1, maybe_rerank_results, P);
 route(<<"hecate-rag.get_chunk_by_id">>, #{<<"chunk_id">> := Id}) ->
@@ -137,6 +137,15 @@ route(<<"hecate-rag.list_sources_page">>, P) ->
 route(Other, _P) ->
     {error, {unknown_method, Other}}.
 
+%% Mirrors the HTTP surface's #{hits => Hits} shape (answer_query_api.erl), so
+%% a mesh caller and an HTTP caller see the same contract.
+answer_query_result({ok, Hits})    -> {ok, #{hits => Hits}};
+answer_query_result({error, _} = E) -> E.
+
+%% rerank_results is the one slice still on the old evoq-dispatch scaffolding
+%% (maybe_rerank_results:dispatch/1 calls evoq:dispatch/4, which no longer
+%% exists in this app's deps) — a pre-existing stub, not something this route
+%% table can fix on its own; see maybe_rerank_results.erl's own TODO.
 delegate(CmdMod, HandlerMod, Params) ->
     case CmdMod:from_map(Params) of
         {ok, Cmd}      -> dispatched(HandlerMod:dispatch(Cmd));
