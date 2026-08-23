@@ -1,31 +1,32 @@
-%%% @doc Handler for `ingest_document_v1`. Validates the command and produces
-%%% `document_ingested_v1` as its outcome. Wire into evoq via
-%%% `evoq:register_handler(ingest_document_v1, ?MODULE)` once business rules
-%%% land here.
+%%% @doc Handler for `ingest_document': records a document's raw content as
+%%% a source record in `rag_store'. `embed_document' reads it back to
+%%% chunk + embed it.
 -module(maybe_ingest_document).
 
--export([handle/1, handle/2, dispatch/1]).
+-export([ingest/1]).
 
--spec handle(ingest_document_v1:t()) ->
-    {ok, [document_ingested_v1:t()]} | {error, term()}.
-handle(Cmd) -> handle(Cmd, undefined).
-
--spec handle(ingest_document_v1:t(), term()) ->
-    {ok, [document_ingested_v1:t()]} | {error, term()}.
-handle(Cmd, _State) ->
-    case ingest_document_v1:validate(Cmd) of
-        ok ->
-            {ok, Event} = document_ingested_v1:new(#{
-                document_id => ingest_document_v1:get_document_id(Cmd)
-                %% TODO: copy relevant fields from Cmd into Event
-            }),
-            {ok, [Event]};
-        {error, R} ->
-            {error, R}
+-spec ingest(map()) -> {ok, #{document_id := binary()}} | {error, term()}.
+ingest(Params) when is_map(Params) ->
+    case ingest_document_v1:from_map(Params) of
+        {ok, Cmd}      -> ingest_cmd(Cmd);
+        {error, _} = E -> E
     end.
 
-%% @doc Dispatch via evoq — persists the produced event(s).
--spec dispatch(ingest_document_v1:t()) -> ok | {error, term()}.
-dispatch(Cmd) ->
-    StreamId = ingest_document_v1:stream_id(Cmd),
-    evoq:dispatch(rag_store, StreamId, Cmd, ?MODULE).
+ingest_cmd(Cmd) ->
+    case ingest_document_v1:validate(Cmd) of
+        ok         -> do_ingest(Cmd);
+        {error, R} -> {error, R}
+    end.
+
+do_ingest(Cmd) ->
+    Id = ingest_document_v1:get_document_id(Cmd),
+    Source = #{
+        document_id => Id,
+        source_path => ingest_document_v1:get_source_path(Cmd),
+        source_type => ingest_document_v1:get_source_type(Cmd),
+        raw_bytes   => ingest_document_v1:get_raw_bytes(Cmd)
+    },
+    case rag_store:upsert_source(Source) of
+        ok             -> {ok, #{document_id => Id}};
+        {error, _} = E -> E
+    end.

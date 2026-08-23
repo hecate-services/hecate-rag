@@ -13,14 +13,11 @@ init(Req0, State) ->
 
 handle(Req0, _State) ->
     case hecate_rag_http:read_json_body(Req0) of
-        {ok, Params, Req1}          -> on_params(ingest_document_v1:from_map(Params), Req1);
+        {ok, Params, Req1}          -> reply(maybe_ingest_document:ingest(Params), Req1);
         {error, invalid_json, Req1} -> hecate_rag_http:bad_request(<<"Invalid JSON">>, Req1)
     end.
 
-on_params({ok, Cmd}, Req1)       -> reply(maybe_ingest_document:dispatch(Cmd), Req1);
-on_params({error, Reason}, Req1) -> hecate_rag_http:bad_request(reason_to_bin(Reason), Req1).
-
-reply(ok, Req1)               -> hecate_rag_http:ok_json(#{status => accepted}, Req1);
+reply({ok, Result}, Req1)    -> hecate_rag_http:ok_json(Result, Req1);
 reply({error, Reason}, Req1) -> hecate_rag_http:bad_request(reason_to_bin(Reason), Req1).
 
 reason_to_bin(R) when is_atom(R)   -> atom_to_binary(R, utf8);

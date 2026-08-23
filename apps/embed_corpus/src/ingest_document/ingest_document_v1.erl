@@ -1,13 +1,15 @@
-%%% @doc Command `ingest_document_v1`.
+%%% @doc Parameters for `ingest_document'.
 %%%
-%%% Generated stub. Add validation in `maybe_ingest_document` once the slice
-%%% has real business rules.
+%%% Records a document's raw content in `rag_store' as a source record.
+%%% `embed_document' reads it back from there to chunk + embed it —
+%%% ingest and embed stay two calls so a document can be re-embedded (new
+%%% model, new chunk size) without resubmitting its raw bytes.
+%%%
+%%% Not an evoq command: `ingest_document' writes straight to `rag_store'.
+%%% See `embed_document_v1' for why this desk isn't event-sourced.
 -module(ingest_document_v1).
--behaviour(evoq_command).
 
--export([command_type/0]).
--export([new/1, from_map/1, validate/1, to_map/1]).
--export([stream_id/1]).
+-export([new/1, from_map/1, validate/1]).
 -export([get_document_id/1, get_source_path/1, get_source_type/1, get_raw_bytes/1]).
 
 -record(ingest_document_v1, {
@@ -20,9 +22,6 @@
 -opaque t() :: #ingest_document_v1{}.
 -export_type([t/0]).
 
--spec command_type() -> atom().
-command_type() -> ingest_document_v1.
-
 -spec new(map()) -> {ok, t()} | {error, term()}.
 new(#{document_id := Id} = Params) ->
     {ok, #ingest_document_v1{
@@ -32,7 +31,7 @@ new(#{document_id := Id} = Params) ->
         raw_bytes = maps:get(raw_bytes, Params, undefined)
     }};
 new(_) ->
-    {error, missing_aggregate_id}.
+    {error, missing_document_id}.
 
 -spec from_map(map()) -> {ok, t()} | {error, term()}.
 from_map(#{<<"document_id">> := Id} = Map) ->
@@ -43,25 +42,11 @@ from_map(#{<<"document_id">> := Id} = Map) ->
         raw_bytes = maps:get(<<"raw_bytes">>, Map, undefined)
     }};
 from_map(_) ->
-    {error, missing_aggregate_id}.
+    {error, missing_document_id}.
 
 -spec validate(t()) -> ok | {error, term()}.
-validate(#ingest_document_v1{document_id = undefined}) -> {error, missing_aggregate_id};
+validate(#ingest_document_v1{document_id = undefined}) -> {error, missing_document_id};
 validate(_) -> ok.
-
--spec to_map(t()) -> map().
-to_map(#ingest_document_v1{} = Cmd) ->
-    #{
-        command_type => ingest_document_v1,
-        document_id => Cmd#ingest_document_v1.document_id,
-        source_path => Cmd#ingest_document_v1.source_path,
-        source_type => Cmd#ingest_document_v1.source_type,
-        raw_bytes => Cmd#ingest_document_v1.raw_bytes
-    }.
-
--spec stream_id(t()) -> binary().
-stream_id(#ingest_document_v1{document_id = Id}) ->
-    <<"document-", Id/binary>>.
 
 -spec get_document_id(t()) -> binary() | undefined.
 get_document_id(#ingest_document_v1{document_id = V}) -> V.

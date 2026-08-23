@@ -1,32 +1,16 @@
 %%% @doc Handler for `seed_corpus_v1`.
 %%%
 %%% Bulk-loads a directory of markdown into `rag_store'. Walks files,
-%%% header-chunks each, embeds each chunk via `hecate_embed', persists
-%%% via `rag_store:add_chunk/4'.
+%%% header-chunks each, persists via `rag_store:put_chunk/3' — embedding
+%%% happens automatically (barrel record-mode policy), no separate embed
+%%% call to make here.
 %%%
-%%% INTENTIONALLY BYPASSES EVOQ for this dev/bulk path:
-%%%
-%%%   - This is a control-plane operation (rebuild from filesystem),
-%%%     not the per-document audit-worthy event flow that the existing
-%%%     `embed_document_v1' / `document_embedded_v1' projection
-%%%     covers.
-%%%
-%%%   - Going through evoq would emit one event per chunk, which is
-%%%     the wrong granularity for seeding (no per-aggregate stream
-%%%     identity, no useful audit value, and a 5-10x storage cost
-%%%     over the chunk itself).
-%%%
-%%% If/when we want event-sourced re-ingest semantics, add a separate
-%%% command. Don't conflate the two.
+%%% This is a control-plane operation (rebuild from filesystem), the bulk
+%%% counterpart to the per-document `ingest_document'/`embed_document'
+%%% pair. Neither path is event-sourced: see `embed_document_v1' for why.
 -module(maybe_seed_corpus).
 
--export([
-    seed/1,
-    seed_async/1,
-    dispatch/1,
-    handle/1,
-    handle/2
-]).
+-export([seed/1, seed_async/1]).
 
 -type stats() :: #{
     files       := non_neg_integer(),
@@ -63,27 +47,6 @@ seed_async(Params) ->
     Pid = spawn(fun() -> Owner ! {seed_done, self(), seed(Params)} end),
     {ok, #{job_pid => Pid}}.
 
-%%% Standard handler shape (for parity with sibling slices; no event emitted)
-
--spec handle(seed_corpus_v1:t()) ->
-    {ok, []} | {error, term()}.
-handle(Cmd) -> handle(Cmd, undefined).
-
--spec handle(seed_corpus_v1:t(), term()) ->
-    {ok, []} | {error, term()}.
-handle(Cmd, _State) ->
-    case seed(Cmd) of
-        {ok, _Stats}    -> {ok, []};
-        {error, _} = E  -> E
-    end.
-
--spec dispatch(seed_corpus_v1:t()) -> ok | {error, term()}.
-dispatch(Cmd) ->
-    case seed(Cmd) of
-        {ok, _Stats}   -> ok;
-        {error, _} = E -> E
-    end.
-
 %%% Internals
 
 do_seed(undefined, _Glob, _Exclude) ->
@@ -104,9 +67,8 @@ walk_and_index(RootDir, Glob, Excludes) ->
                embed_errors => 0, skipped => 0, elapsed_ms => 0},
     logger:info("[seed_corpus] starting: root=~ts files=~p (after excludes from ~p)",
                 [RootDir, length(Filtered), length(Files)]),
-    {ok, Model} = hecate_embed:default_model(),
     Stats = lists:foldl(
-        fun(File, Acc) -> ingest_file(File, RootDir, Model, Acc) end,
+        fun(File, Acc) -> ingest_file(File, RootDir, Acc) end,
         Stats0,
         Filtered
     ),
@@ -117,33 +79,25 @@ walk_and_index(RootDir, Glob, Excludes) ->
     logger:info("[seed_corpus] done: ~p", [Stats1]),
     {ok, Stats1}.
 
-ingest_file(AbsPath, RootDir, Model, Acc0) ->
+ingest_file(AbsPath, RootDir, Acc0) ->
     RelPath = list_to_binary(string:replace(AbsPath, RootDir ++ "/", "", leading)),
     case markdown_chunker:chunk_file(AbsPath, RelPath) of
         {ok, []} ->
             bump(skipped, Acc0);
         {ok, Chunks} ->
-            fold_chunks(Chunks, Model, Acc0);
+            fold_chunks(Chunks, Acc0);
         {error, Reason} ->
             logger:warning("[seed_corpus] read error: ~ts ~p", [AbsPath, Reason]),
             bump(skipped, Acc0)
     end.
 
-fold_chunks(Chunks, Model, Acc0) ->
-    lists:foldl(fun(C, Acc) -> embed_and_store(C, Model, Acc) end, Acc0, Chunks).
+fold_chunks(Chunks, Acc0) ->
+    lists:foldl(fun(C, Acc) -> store_chunk(C, Acc) end, Acc0, Chunks).
 
-embed_and_store(Chunk, Model, Acc) ->
+store_chunk(Chunk, Acc) ->
     #{chunk_id := Id, content := Content} = Chunk,
     Meta = maps:without([chunk_id, content], Chunk),
-    case hecate_embed:embed(Model, Content) of
-        {ok, Vec}       -> store_chunk(Id, Content, Vec, Meta, Acc);
-        {error, Reason} ->
-            logger:warning("[seed_corpus] embed error chunk=~s ~p", [Id, Reason]),
-            bump([chunks, embed_errors], Acc)
-    end.
-
-store_chunk(Id, Content, Vec, Meta, Acc) ->
-    case rag_store:add_chunk(Id, Content, Vec, Meta) of
+    case rag_store:put_chunk(Id, Content, Meta) of
         ok ->
             bump([chunks, embeds], Acc);
         {error, Reason} ->

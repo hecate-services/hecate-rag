@@ -6,7 +6,8 @@
 %%% Two call shapes accepted:
 %%%
 %%%   #{<<"query_text">> := Text, <<"top_k">> := N}
-%%%       text → hecate_embed:embed → rag_store:search
+%%%       barrel embeds the query itself (record-mode database, see
+%%%       rag_store) — no separate embed call needed here.
 %%%
 %%%   #{<<"query_vector">> := [Float], <<"top_k">> := N}
 %%%       use the provided vector directly (caller already embedded)
@@ -19,28 +20,14 @@
 -define(DEFAULT_TOP_K, 10).
 
 -spec handle(map()) -> {ok, [map()]} | {error, term()}.
+handle(#{<<"query_vector">> := V} = Params) when is_list(V) ->
+    rag_store:search_vector(V, top_k(Params));
+handle(#{<<"query_text">> := Text} = Params) when is_binary(Text) ->
+    rag_store:search_text(Text, top_k(Params));
 handle(Params) when is_map(Params) ->
-    TopK = top_k(Params),
-    case query_vector(Params) of
-        {ok, Vector} ->
-            rag_store:search(Vector, TopK);
-        {error, _} = E ->
-            E
-    end;
+    {error, query_text_or_vector_required};
 handle(_) ->
     {error, bad_params}.
-
-%%% Internals
-
-query_vector(#{<<"query_vector">> := V}) when is_list(V) ->
-    {ok, V};
-query_vector(#{<<"query_text">> := Text}) when is_binary(Text) ->
-    case hecate_embed:embed(Text) of
-        {ok, V}        -> {ok, V};
-        {error, _} = E -> E
-    end;
-query_vector(_) ->
-    {error, query_text_or_vector_required}.
 
 top_k(#{<<"top_k">> := N}) when is_integer(N), N > 0, N =< 100 -> N;
 top_k(_)                                                       -> ?DEFAULT_TOP_K.
