@@ -285,10 +285,20 @@ vector_data_dir() ->
 configured_dim() ->
     application:get_env(hecate_rag, embed_dim, ?DEFAULT_DIM).
 
+%% Provider selection. Defaults to `ollama' (a laptop/dev convenience --
+%% see config/dev.config), so a local run needs nothing extra. Fleet
+%% deployment sets `embed_provider = hecate_embedder' (config/sys.config.src):
+%% the beam Celerons have no AVX2, so embedding runs on hecate-embedder,
+%% reached over the mesh, not locally -- see rag_embed_hecate_embedder.
 embedder() ->
-    Url = application:get_env(hecate_rag, embed_url, <<"http://127.0.0.1:11434">>),
-    Model = application:get_env(hecate_rag, embed_model, <<"nomic-embed-text">>),
-    {ollama, #{url => to_bin(Url), model => to_bin(Model)}}.
+    case application:get_env(hecate_rag, embed_provider, ollama) of
+        hecate_embedder ->
+            {rag_embed_hecate_embedder, #{dimension => configured_dim()}};
+        ollama ->
+            Url = application:get_env(hecate_rag, embed_url, <<"http://127.0.0.1:11434">>),
+            Model = application:get_env(hecate_rag, embed_model, <<"nomic-embed-text">>),
+            {ollama, #{url => to_bin(Url), model => to_bin(Model)}}
+    end.
 
 to_bin(B) when is_binary(B) -> B;
 to_bin(L) when is_list(L)   -> list_to_binary(L).

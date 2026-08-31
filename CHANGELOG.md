@@ -5,6 +5,37 @@ Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed (found preparing the first real fleet deployment; v0.1.0 could not have run there)
+- `config/sys.config` was a plain, hardcoded file -- no `${VAR}` templating,
+  and `rebar.config`'s `relx` block never set `sys_config_src`/`vm_args_src`,
+  so `RELX_REPLACE_OS_VARS` (which every compose file in `macula-io/macula-demo`
+  sets) had nothing to substitute. `HECATE_DATA_DIR`, `HECATE_HEALTH_PORT`,
+  `HECATE_NODE_NAME`/`HECATE_NODE_HOST`/`HECATE_COOKIE` would all have been
+  silently ignored, and the release had **no `realm` key configured at all** --
+  it could not have joined a specific realm. Added `config/sys.config.src` +
+  `config/vm.args.src` (relx-templated, mirroring hecate-mail's proven
+  pattern) and wired them into `rebar.config`. Verified live: built a real
+  `prod` release, booted it with the exact env vars the fleet compose file
+  sets, confirmed every value substituted correctly via a running-node RPC
+  (not `eval`, which boots a throwaway instance).
+- Missing `identity_key_path` in the `hecate_om` config block -- the same
+  bug class hecate-mail and hecate-tube each independently hit: without it,
+  `hecate_om_identity:keypair/0` returns `{error, no_keypair}` forever and
+  capability advertisement silently no-ops on every republish tick, with no
+  crash and no error logged. The node would have looked perfectly healthy
+  (connects, `/health` green) while all 12 mesh capabilities stayed
+  unreachable. Added, matching hecate-mail's own fix.
+- Embedding was hardcoded to a local Ollama HTTP endpoint. The beam fleet's
+  Celerons have no AVX2 (the ONNX runtime SIGILLs), which is exactly why
+  `hecate-embedder` exists as a separate sovereign mesh service already used
+  by e.g. Spartan's long-term memory. Added `rag_embed_hecate_embedder.erl`,
+  a `barrel_embed_provider` implementation reaching `io.hecate.embed` over
+  `macula:call`, and an `embed_provider` config switch (`ollama` for local
+  dev, unchanged default; `hecate_embedder` for fleet deployment, set in the
+  new `sys.config.src`). `embed_dim` changes accordingly: 768
+  (nomic-embed-text, dev) vs. 384 (multilingual-e5-small, fleet) -- the two
+  are not interchangeable databases.
+
 ## [0.1.0] - 2026-08-31
 
 ### Fixed (local dev container was 3 months stale, masking that the barrel migration below had already landed in source)

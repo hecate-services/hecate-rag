@@ -1,0 +1,54 @@
+%% Production sys.config for hecate-rag, fleet-deployed.
+%%
+%% Substituted by relx at boot (RELX_REPLACE_OS_VARS=true, set by every
+%% compose file in macula-io/macula-demo); every ${VAR} must resolve or
+%% the node will not start with a malformed term. That is the correct
+%% failure: a service with a half-configured realm announces itself
+%% where nobody can attribute it, which looks exactly like a healthy
+%% node. Mirrors hecate-mail's config/sys.config.src -- same substrate,
+%% same convention, copied deliberately rather than reinvented.
+[
+    {hecate_rag, [
+        {http_port,   ${HECATE_HTTP_PORT}},
+        {data_dir,    "${HECATE_DATA_DIR}"},
+
+        %% The beam Celerons have no AVX2 (the ONNX runtime SIGILLs), so
+        %% embedding runs on hecate-embedder over the mesh, not a local
+        %% Ollama -- see rag_embed_hecate_embedder.erl. 384 is
+        %% multilingual-e5-small's real output dimension (hecate-embed's
+        %% own default_dim), not nomic-embed-text's 768 the dev/test
+        %% configs use -- these do NOT interchange; a database opened
+        %% with one dimension cannot be queried with vectors from the
+        %% other.
+        {embed_provider, hecate_embedder},
+        {embed_dim,       384}
+    ]},
+
+    {hecate_om, [
+        {service_cert_path, "/etc/hecate/secrets/service-cert.pem"},
+        {station_socket,    "/run/macula/station.sock"},
+        {health_port,       ${HECATE_HEALTH_PORT}},
+
+        %% MANDATORY BECAUSE THIS SERVICE ADVERTISES CAPABILITIES (see
+        %% capabilities/0 in hecate_rag_service.erl). Without this,
+        %% hecate_om_identity:keypair/0 returns {error, no_keypair}
+        %% forever, and capability advertisement silently no-ops on
+        %% every republish tick, permanently, with no crash and no error
+        %% logged -- the service still connects and answers /health, so
+        %% it looks exactly like a healthy node while every one of its
+        %% 12 capabilities is unreachable. Same bug class hecate-mail
+        %% and hecate-tube already hit and fixed; see hecate-mail's own
+        %% config/sys.config.src for the identical line this mirrors.
+        {identity_key_path, "${HECATE_DATA_DIR}/identity/keypair.erl.bin"},
+
+        %% THE REALM IS AN APPLICATION ENV, NOT A SHELL VARIABLE, and
+        %% this file is the only place the two meet. hecate_om_identity:
+        %% realm/0 reads application:get_env(hecate_om, realm); exporting
+        %% HECATE_REALM in the shell and expecting that to be enough has
+        %% cost a sibling service an hour, because nothing translates
+        %% between the two by itself.
+        {realm, <<"${HECATE_REALM}">>}
+    ]},
+
+    {kernel, [{logger_level, info}]}
+].

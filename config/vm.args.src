@@ -1,0 +1,7 @@
+## Node identity and runtime flags for hecate_rag.
+## Mirrors hecate-mail's config/vm.args.src -- same substrate, same convention.
+-name ${HECATE_NODE_NAME}@${HECATE_NODE_HOST}
+-setcookie ${HECATE_COOKIE}
+
++K true
++A 8
