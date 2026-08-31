@@ -35,8 +35,16 @@ COPY config ./config
 # We copy from `_checkouts_resolved/` (a symlink-free, _build-pruned
 # mirror produced by `scripts/sync-checkouts.sh`) because docker/podman
 # COPY does not safely follow symlinks. When _checkouts_resolved/ is
-# missing or empty, the COPY is a no-op and rebar3 falls back to the
-# git deps in the lock file.
+# EMPTY, the COPY is a no-op and rebar3 falls back to the git deps in
+# the lock file -- but COPY fails hard (not a no-op) if the directory
+# doesn't exist AT ALL, which it never does in a fresh checkout since
+# it's gitignored (real local content only, .gitignore excludes
+# everything under it). `.gitkeep` keeps the directory itself
+# present-but-empty in every checkout, including CI's, so this COPY
+# only ever hits the actually-tolerated "empty" case. Found live: CI's
+# very first build after the barrel migration failed outright on this
+# ("_checkouts_resolved": not found) -- this Containerfile step had
+# silently never worked from a clean checkout.
 COPY _checkouts_resolved ./_checkouts/
 
 # Build Rustler NIFs for the local checkouts (musl-targeted, matches
