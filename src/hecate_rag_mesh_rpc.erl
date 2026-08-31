@@ -36,7 +36,9 @@
     handle_search_chunks_semantic/1,
     handle_list_chunks_by_source/1,
     handle_get_source_by_id/1,
-    handle_list_sources_page/1
+    handle_list_sources_page/1,
+    handle_detect_corpus_change/1,
+    handle_schedule_reembed/1
 ]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -96,7 +98,9 @@ handler_table() ->
         {<<"hecate-rag.search_chunks_semantic">>, handle_search_chunks_semantic},
         {<<"hecate-rag.list_chunks_by_source">>,  handle_list_chunks_by_source},
         {<<"hecate-rag.get_source_by_id">>,       handle_get_source_by_id},
-        {<<"hecate-rag.list_sources_page">>,      handle_list_sources_page}
+        {<<"hecate-rag.list_sources_page">>,      handle_list_sources_page},
+        {<<"hecate-rag.detect_corpus_change">>,   handle_detect_corpus_change},
+        {<<"hecate-rag.schedule_reembed">>,       handle_schedule_reembed}
     ].
 
 %%% Internal: SDK handler entry points (one per capability)
@@ -111,6 +115,8 @@ handle_search_chunks_semantic(P) -> route(<<"hecate-rag.search_chunks_semantic">
 handle_list_chunks_by_source(P)  -> route(<<"hecate-rag.list_chunks_by_source">>, P).
 handle_get_source_by_id(P)       -> route(<<"hecate-rag.get_source_by_id">>, P).
 handle_list_sources_page(P)      -> route(<<"hecate-rag.list_sources_page">>, P).
+handle_detect_corpus_change(P)   -> route(<<"hecate-rag.detect_corpus_change">>, P).
+handle_schedule_reembed(P)       -> route(<<"hecate-rag.schedule_reembed">>, P).
 
 %%% Internal: method → slice handler
 
@@ -123,7 +129,7 @@ route(<<"hecate-rag.prune_chunks">>, P) ->
 route(<<"hecate-rag.answer_query">>, P) ->
     answer_query_result(maybe_answer_query:retrieve(P));
 route(<<"hecate-rag.rerank_results">>, P) ->
-    delegate(rerank_results_v1, maybe_rerank_results, P);
+    rerank_result(maybe_rerank_results:rerank(P));
 route(<<"hecate-rag.get_chunk_by_id">>, #{<<"chunk_id">> := Id}) ->
     get_chunk_by_id:handle(Id);
 route(<<"hecate-rag.search_chunks_semantic">>, P) ->
@@ -134,24 +140,18 @@ route(<<"hecate-rag.get_source_by_id">>, #{<<"source_id">> := Id}) ->
     get_source_by_id:handle(Id);
 route(<<"hecate-rag.list_sources_page">>, P) ->
     list_sources_page:handle(P);
+route(<<"hecate-rag.detect_corpus_change">>, P) ->
+    maybe_detect_corpus_change:detect(P);
+route(<<"hecate-rag.schedule_reembed">>, P) ->
+    maybe_schedule_reembed:schedule(P);
 route(Other, _P) ->
     {error, {unknown_method, Other}}.
 
-%% Mirrors the HTTP surface's #{hits => Hits} shape (answer_query_api.erl), so
-%% a mesh caller and an HTTP caller see the same contract.
+%% Both mirror their own HTTP handler's response shape (answer_query_api.erl/
+%% rerank_results_api.erl), so a mesh caller and an HTTP caller see the same
+%% contract for either.
 answer_query_result({ok, Hits})    -> {ok, #{hits => Hits}};
 answer_query_result({error, _} = E) -> E.
 
-%% rerank_results is the one slice still on the old evoq-dispatch scaffolding
-%% (maybe_rerank_results:dispatch/1 calls evoq:dispatch/4, which no longer
-%% exists in this app's deps) — a pre-existing stub, not something this route
-%% table can fix on its own; see maybe_rerank_results.erl's own TODO.
-delegate(CmdMod, HandlerMod, Params) ->
-    case CmdMod:from_map(Params) of
-        {ok, Cmd}      -> dispatched(HandlerMod:dispatch(Cmd));
-        {error, _} = E -> E
-    end.
-
-dispatched(ok)             -> {ok, #{status => accepted}};
-dispatched({ok, Result})   -> {ok, Result};
-dispatched({error, _} = E) -> E.
+rerank_result({ok, Hits})    -> {ok, #{hits => Hits}};
+rerank_result({error, _} = E) -> E.

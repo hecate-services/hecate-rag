@@ -9,11 +9,7 @@
         crypto,
         cowboy,
         jsx,
-        esqlite,
-        reckon_db,
-        evoq,
-        hecate_vector,
-        hecate_embed
+        barrel
     ]},
     {env, []},
     {modules, []},

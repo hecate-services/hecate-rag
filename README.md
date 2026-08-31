@@ -34,10 +34,16 @@ Advertised onto the mesh bloom-channel and discoverable by name:
 |------------|-------------|
 | `hecate-rag.ingest_document` | Take a document, chunk it, embed it, store |
 | `hecate-rag.embed_document` | (Re-)embed an already-ingested doc |
+| `hecate-rag.prune_chunks` | Remove a document's chunks from the index |
 | `hecate-rag.answer_query` | Top-k retrieval against the index |
+| `hecate-rag.rerank_results` | Rerank a set of hits (semantic + lexical blend) against a query |
 | `hecate-rag.search_chunks_semantic` | Semantic search read API |
 | `hecate-rag.get_chunk_by_id` | Chunk lookup by id |
+| `hecate-rag.list_chunks_by_source` | Chunks for one source_path |
+| `hecate-rag.get_source_by_id` | Source-document lookup by document_id |
 | `hecate-rag.list_sources_page` | Source-document listing |
+| `hecate-rag.detect_corpus_change` | Compare a hash against the last known one for a source; report whether it changed |
+| `hecate-rag.schedule_reembed` | Record a durable re-embed request for a known source |
 
 ## Umbrella layout
 
@@ -93,11 +99,32 @@ See `quadlet/hecate-rag.container` for the canonical unit + the
 
 ## Status
 
-**Scaffold.** Extract from the prior `hecate-apps/hecate-app-rag/hecate-app-ragd`
-plugin scaffold (2026-05-18). Vertical slices preserved; the plugin
-contract has been swapped for the `hecate_om_service` behaviour. RPC
-handlers and end-to-end logic still need wiring against
-`hecate_vector` + `hecate_embed`.
+**Working, not scaffold.** All 12 mesh capabilities are real: `ingest_document`,
+`embed_document`, `prune_chunks`, `get_chunk_by_id`, `list_chunks_by_source`,
+`search_chunks_semantic`, `get_source_by_id`, `list_sources_page`,
+`answer_query`, `rerank_results`, `detect_corpus_change`, and
+`schedule_reembed`. The first nine write through to a real
+[`barrel`](https://hex.pm/packages/barrel) record-mode database (document +
+vector, kept in sync automatically) and a real Ollama embedder -- verified
+live end-to-end (ingest -> embed -> semantic search -> answer_query, two
+independently-phrased queries both correctly retrieving the same ingested
+chunk by meaning, not keyword match), including surviving a real container
+restart (the vector index now persists to the mounted volume, not its own
+default path).
+
+`rerank_results` blends each hit's semantic score with a lexical
+token-overlap score against the query text -- no cross-encoder or other
+learned reranker exists in this codebase's dependency chain, and standing
+one up is a real infra decision for whoever picks `reranker_model`, not
+invented here. `detect_corpus_change` compares a caller-supplied hash
+against a persisted watermark and only reports a real change.
+`schedule_reembed` records a durable request; nothing consumes it yet -- a
+polling worker is separate, standing infrastructure, not part of this
+slice.
+
+Extracted from the prior `hecate-apps/hecate-app-rag/hecate-app-ragd` plugin
+scaffold (2026-05-18); the plugin contract has been swapped for the
+`hecate_om_service` behaviour.
 
 ## License
 

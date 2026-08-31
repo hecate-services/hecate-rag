@@ -4,12 +4,14 @@
 #----------------------------------------------------------------------
 # Stage 1 — builder: full Erlang + rebar3 + deps
 #----------------------------------------------------------------------
-FROM docker.io/erlang:27-alpine AS builder
+FROM docker.io/erlang:28-alpine AS builder
 
 RUN apk add --no-cache \
     git curl bash \
     build-base cmake \
-    perl linux-headers
+    perl linux-headers \
+    openssl-dev \
+    zstd-dev snappy-dev lz4-dev
 
 # Rust via rustup (reckon_db 2.x ships NIFs and hecate_om transitively
 # pulls macula_quic, also a Rust NIF; Alpine's rustc is too old for
@@ -55,13 +57,13 @@ RUN cd /build && rebar3 as prod tar
 #
 # Using a different alpine version risks an OpenSSL ABI mismatch
 # (crypto.so was linked against the builder's libcrypto). Pinning to
-# the same `erlang:27-alpine' image keeps ABI alignment at the cost
+# the same `erlang:28-alpine' image keeps ABI alignment at the cost
 # of a larger image; the dev cycle prizes reliability over thinness.
 # Switch to a slimmer base when we have a proper rel-package pipeline.
 #----------------------------------------------------------------------
-FROM docker.io/erlang:27-alpine
+FROM docker.io/erlang:28-alpine
 
-RUN apk add --no-cache libstdc++ ncurses-libs openssl
+RUN apk add --no-cache libstdc++ ncurses-libs openssl zstd-libs snappy lz4-libs
 
 WORKDIR /app
 COPY --from=builder /build/_build/prod/rel/hecate_rag/*.tar.gz /tmp/release.tar.gz

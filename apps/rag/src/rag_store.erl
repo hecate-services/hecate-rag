@@ -53,7 +53,11 @@
     get_source/1,
     get_source_content/1,
     list_sources/2,
-    list_chunks_by_source/2
+    list_chunks_by_source/2,
+    find_source_by_path/1,
+    get_watermark/2,
+    put_watermark/3,
+    put_reembed_request/1
 ]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
@@ -61,6 +65,8 @@
 -define(DB_NAME, rag_chunks).
 -define(DEFAULT_DIM, 768).
 -define(SOURCE_ID_PREFIX, "source:").
+-define(WATERMARK_ID_PREFIX, "watermark:").
+-define(REEMBED_ID_PREFIX, "reembed:").
 
 -record(state, {db = undefined :: map() | undefined}).
 
@@ -133,6 +139,39 @@ list_chunks_by_source(SourcePath, Limit)
   when is_binary(SourcePath), is_integer(Limit), Limit > 0 ->
     gen_server:call(?MODULE, {list_chunks_by_source, SourcePath, Limit}).
 
+%% @doc The source record for a `source_path', regardless of which
+%% `document_id' it was ingested under -- `detect_corpus_change'/
+%% `schedule_reembed' address a corpus by path (what a directory scan
+%% actually has on hand), not by the caller-chosen id `ingest_document'
+%% used. First match wins; a `source_path' is expected to be unique in
+%% practice (`ingest_document' upserts by `document_id', not path, so
+%% nothing enforces this at write time -- a caller ingesting the same
+%% path under two different ids is a caller error this doesn't try to
+%% detect).
+-spec find_source_by_path(binary()) -> {ok, map()} | {error, not_found}.
+find_source_by_path(SourcePath) when is_binary(SourcePath) ->
+    gen_server:call(?MODULE, {find_source_by_path, SourcePath}).
+
+%% @doc The last-recorded `diff_hash' for one `(corpus_id, source_path)'
+%% pair -- what `detect_corpus_change' compares a freshly-computed hash
+%% against to decide whether anything actually changed.
+-spec get_watermark(binary(), binary()) -> {ok, #{diff_hash := binary()}} | {error, not_found}.
+get_watermark(CorpusId, SourcePath) when is_binary(CorpusId), is_binary(SourcePath) ->
+    gen_server:call(?MODULE, {get_watermark, CorpusId, SourcePath}).
+
+-spec put_watermark(binary(), binary(), binary()) -> ok | {error, term()}.
+put_watermark(CorpusId, SourcePath, DiffHash)
+  when is_binary(CorpusId), is_binary(SourcePath), is_binary(DiffHash) ->
+    gen_server:call(?MODULE, {put_watermark, CorpusId, SourcePath, DiffHash}).
+
+%% @doc Records a re-embed request. `Req' keys: `document_id',
+%% `corpus_id', `source_path' (required), `priority', `scheduled_at'
+%% (optional). No worker consumes these yet -- see `maybe_schedule_reembed'
+%% for what's deliberately not built here.
+-spec put_reembed_request(map()) -> {ok, #{request_id := binary()}} | {error, term()}.
+put_reembed_request(#{document_id := Id} = Req) when is_binary(Id) ->
+    gen_server:call(?MODULE, {put_reembed_request, Req}).
+
 %%% gen_server
 
 init([]) ->
@@ -171,6 +210,18 @@ handle_call({list_sources, Offset, Limit}, _From, S0) ->
 handle_call({list_chunks_by_source, SourcePath, Limit}, _From, S0) ->
     with_db(S0, fun(Db) -> list_chunks_by_source_page(Db, SourcePath, Limit) end, {ok, []});
 
+handle_call({find_source_by_path, SourcePath}, _From, S0) ->
+    with_db(S0, fun(Db) -> find_source_by_path_doc(Db, SourcePath) end);
+
+handle_call({get_watermark, CorpusId, SourcePath}, _From, S0) ->
+    with_db(S0, fun(Db) -> watermark_from_doc(barrel:get_doc(Db, watermark_id(CorpusId, SourcePath))) end);
+
+handle_call({put_watermark, CorpusId, SourcePath, DiffHash}, _From, S0) ->
+    with_db(S0, fun(Db) -> put_watermark_doc(Db, CorpusId, SourcePath, DiffHash) end);
+
+handle_call({put_reembed_request, Req}, _From, S0) ->
+    with_db(S0, fun(Db) -> put_reembed_request_doc(Db, Req) end);
+
 handle_call(_, _From, S) -> {reply, {error, unknown_call}, S}.
 
 handle_cast(_, S) -> {noreply, S}.
@@ -202,9 +253,19 @@ on_open_error(Fallback, _Error) -> Fallback.
 
 reply_result(Result, State) -> {reply, Result, State}.
 
+%% Found live (2026-08-31): the vector index was empty after every
+%% container restart even though the docdb (get_chunk_by_id) survived
+%% fine -- `vectordb' was never passed here, so barrel_vectordb_store
+%% fell back to its own default `db_path' ("priv/barrel_vectordb_data",
+%% relative to the release's cwd), never the mounted persistent volume
+%% `docdb' correctly uses. barrel_vectordb_store IS itself RocksDB-
+%% backed and does reload/rebuild its HNSW index from persisted
+%% metadata on open (see load_or_create_index/4 there) -- this was a
+%% pure missing-config bug on this side, not a real barrel limitation.
 open_db() ->
     barrel:open(?DB_NAME, #{
         docdb => #{data_dir => data_dir()},
+        vectordb => #{db_path => vector_data_dir()},
         embedding => #{
             fields => [<<"content">>],
             mode => sync,
@@ -217,6 +278,9 @@ open_db() ->
 
 data_dir() ->
     application:get_env(hecate_rag, data_dir, "/var/lib/hecate-rag/data").
+
+vector_data_dir() ->
+    filename:join(data_dir(), "vectors").
 
 configured_dim() ->
     application:get_env(hecate_rag, embed_dim, ?DEFAULT_DIM).
@@ -241,7 +305,35 @@ to_bin(L) when is_list(L)   -> list_to_binary(L).
 put_chunk_doc(Db, Id, Content, Meta) ->
     Shaped = json_shape(Meta),
     Doc = Shaped#{<<"id">> => Id, <<"content">> => Content},
-    normalize_write(barrel:put_doc(Db, Doc)).
+    normalize_write(put_doc_upsert(Db, Id, Doc)).
+
+%% barrel requires the current `_rev' on the Doc map to update an
+%% existing document -- a blind put_doc (no _rev) on an id that
+%% already exists is rejected as {error, conflict}, not silently
+%% overwritten (see barrel_docdb's own put_doc/2,3 doc comment: "for
+%% updates, the document must include the current _rev value").
+%%
+%% A conflict here is a real "fetch the current _rev and retry", not
+%% "already correct, nothing to do": chunk_id is position-derived
+%% (source_path|header_path|start_line, see markdown_chunker.erl), not
+%% content-derived, so the SAME id can legitimately need DIFFERENT
+%% content on a genuine re-ingest -- treating conflict as a silent
+%% success would leave stale content indexed. Found live re-running
+%% seed_corpus against hecate-corpus: every one of ~500+ chunks from
+%% the first run reported conflict on the second, and without this fix
+%% every one of those would have been silently skipped rather than
+%% actually re-written.
+put_doc_upsert(Db, Id, Doc) ->
+    case barrel:put_doc(Db, Doc) of
+        {error, conflict} -> put_doc_with_current_rev(Db, Id, Doc);
+        Result            -> Result
+    end.
+
+put_doc_with_current_rev(Db, Id, Doc) ->
+    case barrel:get_doc(Db, Id) of
+        {ok, #{<<"_rev">> := Rev}} -> barrel:put_doc(Db, Doc#{<<"_rev">> => Rev});
+        {error, _} = E             -> E
+    end.
 
 json_shape(Map) ->
     maps:fold(fun(K, V, Acc) -> Acc#{json_key(K) => json_value(V)} end, #{}, Map).
@@ -285,15 +377,16 @@ hit(#{key := Id, score := Score, text := Text, metadata := Meta}) ->
 source_id(DocumentId) -> <<?SOURCE_ID_PREFIX, DocumentId/binary>>.
 
 put_source_doc(Db, #{document_id := Id} = Source) ->
+    SourceDocId = source_id(Id),
     Doc = #{
-        <<"id">>          => source_id(Id),
+        <<"id">>          => SourceDocId,
         <<"type">>        => <<"source">>,
         <<"document_id">> => Id,
         <<"source_path">> => maps:get(source_path, Source, <<>>),
         <<"source_type">> => maps:get(source_type, Source, <<>>),
         <<"raw_bytes">>   => maps:get(raw_bytes, Source, <<>>)
     },
-    normalize_write(barrel:put_doc(Db, Doc)).
+    normalize_write(put_doc_upsert(Db, SourceDocId, Doc)).
 
 source_from_doc({ok, #{<<"type">> := <<"source">>} = Doc}) ->
     {ok, source_row(Doc)};
@@ -331,4 +424,55 @@ list_chunks_by_source_page(Db, SourcePath, Limit) ->
             {ok, [C || D <- Docs, {ok, C} <- [chunk_from_doc({ok, find_doc(D)})]]};
         {error, _} = E ->
             E
+    end.
+
+find_source_by_path_doc(Db, SourcePath) ->
+    Query = #{where => [
+        {path, [<<"type">>], <<"source">>},
+        {path, [<<"source_path">>], SourcePath}
+    ]},
+    case barrel:find(Db, Query, #{limit => 1}) of
+        {ok, [D | _], _Meta} -> {ok, source_row(find_doc(D))};
+        {ok, [], _Meta}      -> {error, not_found};
+        {error, _} = E       -> E
+    end.
+
+%%% Internals — corpus watermarks (detect_corpus_change)
+
+watermark_id(CorpusId, SourcePath) ->
+    <<?WATERMARK_ID_PREFIX, CorpusId/binary, $:, SourcePath/binary>>.
+
+put_watermark_doc(Db, CorpusId, SourcePath, DiffHash) ->
+    WatermarkId = watermark_id(CorpusId, SourcePath),
+    Doc = #{
+        <<"id">>          => WatermarkId,
+        <<"type">>        => <<"watermark">>,
+        <<"corpus_id">>   => CorpusId,
+        <<"source_path">> => SourcePath,
+        <<"diff_hash">>   => DiffHash
+    },
+    normalize_write(put_doc_upsert(Db, WatermarkId, Doc)).
+
+watermark_from_doc({ok, #{<<"type">> := <<"watermark">>, <<"diff_hash">> := Hash}}) ->
+    {ok, #{diff_hash => Hash}};
+watermark_from_doc(_NotFoundOrNotAWatermark) ->
+    {error, not_found}.
+
+%%% Internals — re-embed requests (schedule_reembed)
+
+put_reembed_request_doc(Db, #{document_id := DocId} = Req) ->
+    RequestId = <<?REEMBED_ID_PREFIX, DocId/binary, $:, (integer_to_binary(erlang:unique_integer([positive])))/binary>>,
+    Doc = #{
+        <<"id">>            => RequestId,
+        <<"type">>          => <<"reembed_request">>,
+        <<"document_id">>   => DocId,
+        <<"corpus_id">>     => maps:get(corpus_id, Req, <<>>),
+        <<"source_path">>   => maps:get(source_path, Req, <<>>),
+        <<"priority">>      => maps:get(priority, Req, <<>>),
+        <<"scheduled_at">>  => maps:get(scheduled_at, Req, <<>>),
+        <<"status">>        => <<"pending">>
+    },
+    case normalize_write(barrel:put_doc(Db, Doc)) of
+        ok             -> {ok, #{request_id => RequestId}};
+        {error, _} = E -> E
     end.

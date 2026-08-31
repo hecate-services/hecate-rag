@@ -45,8 +45,13 @@ from_map(#{<<"corpus_id">> := Id} = Map) ->
 from_map(_) ->
     {error, missing_aggregate_id}.
 
+%% `source_path' is load-bearing for `maybe_schedule_reembed' -- it's
+%% how the target document gets found (this command carries no
+%% `document_id' of its own). `priority'/`scheduled_at' stay optional,
+%% informational fields on the recorded request.
 -spec validate(t()) -> ok | {error, term()}.
 validate(#schedule_reembed_v1{corpus_id = undefined}) -> {error, missing_aggregate_id};
+validate(#schedule_reembed_v1{source_path = undefined}) -> {error, missing_source_path};
 validate(_) -> ok.
 
 -spec to_map(t()) -> map().

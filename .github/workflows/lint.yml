@@ -8,7 +8,18 @@ jobs:
   elvis:
     runs-on: ubuntu-latest
     container:
-      image: erlang:27
+      # MUST MATCH the Containerfile's builder stage OTP version.
+      image: erlang:28
     steps:
       - uses: actions/checkout@v4
-      - run: rebar3 as lint lint
+      # hecate_om pulls in rocksdb (via barrel_docdb) and khepri/ra
+      # transitively, unconditionally -- needed to even compile, which
+      # `rebar3 lint` requires before elvis can analyze anything.
+      # libsnappy-dev liblz4-dev libzstd-dev libbz2-dev: rocksdb's
+      # CMakeLists auto-detects each via find_package() and, if one is
+      # missing, silently disables it rather than failing the build --
+      # install all four, not just whichever this repo happens to
+      # exercise first. Same reasoning as hecate-om's/hecate-mail's own
+      # lint-and-test.yml.
+      - run: apt-get update && apt-get install -y --no-install-recommends cmake build-essential libsnappy-dev liblz4-dev libzstd-dev libbz2-dev
+      - run: rebar3 lint

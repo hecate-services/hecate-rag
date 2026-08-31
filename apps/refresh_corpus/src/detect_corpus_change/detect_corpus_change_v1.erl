@@ -45,8 +45,15 @@ from_map(#{<<"corpus_id">> := Id} = Map) ->
 from_map(_) ->
     {error, missing_aggregate_id}.
 
+%% `source_path'/`diff_hash' are required here, not optional as the
+%% record type suggests -- both are load-bearing for
+%% `maybe_detect_corpus_change''s actual comparison (which source, and
+%% against what hash), not just descriptive metadata. `kind' stays
+%% optional; nothing branches on it yet.
 -spec validate(t()) -> ok | {error, term()}.
 validate(#detect_corpus_change_v1{corpus_id = undefined}) -> {error, missing_aggregate_id};
+validate(#detect_corpus_change_v1{source_path = undefined}) -> {error, missing_source_path};
+validate(#detect_corpus_change_v1{diff_hash = undefined}) -> {error, missing_diff_hash};
 validate(_) -> ok.
 
 -spec to_map(t()) -> map().

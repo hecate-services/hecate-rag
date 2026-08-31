@@ -1,0 +1,33 @@
+%%% @doc Shared `init_per_suite'/`end_per_suite' helper for every CT suite
+%%% here. `rebar3 ct' runs every suite in one beam node, back to back:
+%%% each suite's own `init_per_suite' starts the whole `hecate_rag'
+%%% application (there is no per-suite isolation otherwise, since the
+%%% mesh RPC/HTTP surface only exists once the real application is up),
+%%% and each `end_per_suite' stops it again for the next suite.
+%%%
+%%% `application:stop/1' is synchronous with respect to the supervision
+%%% tree terminating, but not with respect to the OS actually releasing
+%%% the ranch listener's TCP port -- `gen_tcp:close' finishing does not
+%%% guarantee a following `listen' on the same port succeeds immediately.
+%%% Without a retry, the very next suite's own `init_per_suite' can lose
+%%% that race and fail with `eaddrinuse', purely from run-to-run timing,
+%%% not from anything about the code under test.
+-module(rag_test_helpers).
+
+-export([start_hecate_rag/0, stop_hecate_rag/0]).
+
+%% `application:stop/1' returning is not proof the OS has released the
+%% ranch listener's TCP port yet -- give it a beat before the NEXT
+%% suite's own `start_hecate_rag/0' tries to bind the same one.
+-define(POST_STOP_SETTLE_MS, 500).
+
+-spec start_hecate_rag() -> ok.
+start_hecate_rag() ->
+    {ok, _} = application:ensure_all_started(hecate_rag),
+    ok.
+
+-spec stop_hecate_rag() -> ok.
+stop_hecate_rag() ->
+    _ = application:stop(hecate_rag),
+    timer:sleep(?POST_STOP_SETTLE_MS),
+    ok.

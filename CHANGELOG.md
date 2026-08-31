@@ -5,7 +5,96 @@ Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-31
+
+### Fixed (local dev container was 3 months stale, masking that the barrel migration below had already landed in source)
+- Containerfile builder stage was missing `openssl-dev`/`zstd-dev`/
+  `snappy-dev`/`lz4-dev` -- the QUIC NIF (transitively via `hecate_om`)
+  and RocksDB's native build (transitively via `reckon_db`) couldn't
+  compile at all. Runtime stage gained the matching `.so` packages.
+- Pinned `erlang:27-alpine` -> `erlang:28-alpine`, matching every
+  sibling hecate-services repo.
+- `rag.app.src`/`query_chunks.app.src`/`query_sources.app.src` still
+  declared `esqlite`/`hecate_vector`/`hecate_embed` as real OTP
+  application dependencies -- none exist anymore post-barrel-migration
+  (see the `deps` comment in `rebar.config`), and release assembly
+  hard-fails on a declared-but-missing app. `barrel` added to
+  `rag.app.src` where `rag_store.erl` actually needs it started.
+- `config/sys.config`/`config/dev.config` had `http_port` and
+  `health_port` both set to 8470 -- two separate Cowboy listeners
+  self-colliding on the same port within one process.
+  `config/test.sys.config` already used two distinct ports (18470/18471)
+  for exactly this reason; `health_port` now matches that pattern (8471).
+- Verified live end-to-end against the rebuilt `hecate-rag-dev` container:
+  ingest -> embed (real Ollama call) -> `search_chunks_semantic` and
+  `answer_query`, two independently-phrased queries neither containing
+  the ingested word "capybara" or "rodent" both correctly retrieving the
+  chunk by meaning -- real semantic retrieval, not scaffold.
+- `rag_store`'s writes (`put_chunk_doc`/`put_source_doc`/`put_watermark_doc`)
+  did a blind `barrel:put_doc` with no `_rev` -- barrel rejects a
+  second write to an already-existing id as `{error, conflict}` rather
+  than silently overwriting it. A re-`embed_document` on an
+  already-embedded document (explicitly supported, see that module's
+  own doc comment) was silently failing on every chunk after the
+  first. New `put_doc_upsert/3` fetches the current `_rev` and retries
+  once on conflict. Found live re-ingesting a real corpus.
+- `open_db/0` never passed `vectordb => #{db_path => ...}` to
+  `barrel:open/2` -- the vector index silently fell back to its own
+  default relative path instead of the mounted persistent volume the
+  document store correctly used, so semantic search came back empty
+  after every container restart even though the documents themselves
+  survived fine. Now points at `data_dir()/vectors`, alongside the
+  docdb path. Verified live: ingested a document, searched it
+  successfully, restarted the container, searched again -- same
+  result, same score.
+
 ### Added
+- `rerank_results`/`detect_corpus_change`/`schedule_reembed`: real
+  implementations, not stubs. See their own module doc comments for
+  the reasoning:
+  - `detect_corpus_change` compares a caller-supplied `diff_hash`
+    against a persisted watermark per `(corpus_id, source_path)` and
+    only reports `changed: true` on a genuine difference (or a source
+    never seen before).
+  - `schedule_reembed` resolves `source_path` to the already-ingested
+    document (`rag_store:find_source_by_path/1`) and records a durable
+    `reembed_request` -- deliberately does NOT include a worker that
+    consumes these yet; that's a separate, standing piece of
+    infrastructure, not something to fabricate silently as part of
+    recording the request.
+  - `rerank_results`'s command shape was corrected first (the
+    generated `original_ranking :: binary()` field was never usable --
+    a caller has a *list* of hits, not an opaque binary; now
+    `query_text` + `hits`, matching `search_chunks_semantic`'s own
+    output shape). Reranks by blending each hit's existing semantic
+    score with a lexical token-overlap score against the query text --
+    no cross-encoder or other learned reranker exists anywhere in this
+    codebase's dependency chain, and standing one up is a real
+    infrastructure decision for whoever picks `reranker_model`, not
+    something to invent here. `reranker_model` is accepted and passed
+    through today, informational only.
+  - All three routed and advertised as real mesh RPC capabilities
+    (`hecate_rag_mesh_rpc.erl`, `hecate_rag_service:capabilities/0`);
+    `detect_corpus_change`/`schedule_reembed` are new mesh capabilities
+    (previously HTTP-only). Verified live via HTTP: change-detection's
+    changed/unchanged/changed-again cycle, reembed scheduling against
+    both a known and an unknown source, and reranking correctly
+    promoting a lexically-relevant hit over a purely-higher-semantic
+    one.
+  - Two real bugs found and fixed live testing `rerank_results`
+    specifically: the handler returned its internal `{Score, Hit}`
+    sort-key tuples directly instead of just the hits, which jsx's
+    JSON encoder cannot serialize (`badarg` in `jsx_encoder:unzip/2`
+    on every call); and it read each hit's `score`/`content` fields
+    with atom keys against a JSON-decoded (binary-keyed) map, so the
+    lexical/semantic blend was silently scoring everything off
+    defaults rather than the caller's real values.
+  - Their corresponding never-fired `evoq`-sourced event modules
+    (`corpus_change_detected_v1`, `reembed_scheduled_v1`,
+    `results_reranked_v1`) deleted -- same reasoning `answer_query`'s
+    own migration already established: a pure read/computation, or a
+    write whose own durable record already IS the fact worth keeping,
+    isn't a second fact worth event-sourcing.
 - Initial scaffold extracted from `hecate-apps/hecate-app-rag/hecate-app-ragd`.
 - Adopts the `hecate_om_service` behaviour and the four-tier
   Hecate model: services run on realm infrastructure nodes, not user
@@ -18,15 +107,18 @@ Versioning: [SemVer](https://semver.org/).
   - `serve_retrieval`: answer_query, rerank_results
   - `project_chunks`, `project_sources`: read-model projections
   - `query_chunks`, `query_sources`: read APIs
+- `test/rag_test_helpers.erl`: shared `init_per_suite`/`end_per_suite`
+  helper for the three CT suites. Known, pre-existing limitation, not
+  fully closed by this: `rebar3 ct` running all three suites back to
+  back in one beam node can still intermittently fail with a listener
+  startup race between suites (each suite starts/stops the whole
+  `hecate_rag` app in turn) -- a real, reproducible test-harness gap,
+  not a defect in the capabilities themselves, which are verified
+  correct against the real container above.
 
-### Planned
-- Wire `hecate_om_capabilities:publish/0` to actually advertise on
-  the mesh bloom-channel once `macula:publish/4` is connected
-- Register mesh RPC handlers for each capability via `macula:advertise/3`
-- Real implementation in `maybe_*` handlers (today: validation + event-emit stubs)
-- Projections: SQL `upsert` into `chunks` / `sources` tables on event arrival
-- Query desks: actual `SELECT` + vector-search wiring
-
-## [0.1.0] - YYYY-MM-DD
-
-_Not yet released._
+### Not built -- named honestly rather than silently assumed
+- `schedule_reembed` records requests but nothing consumes them yet --
+  a standing worker that polls `priority`/`scheduled_at` and actually
+  calls `embed_document` when due is separate, real infrastructure,
+  not part of this slice's own job.
+- The CT suite-ordering race noted above.

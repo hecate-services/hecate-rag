@@ -8,7 +8,6 @@
         stdlib,
         crypto,
         cowboy,
-        esqlite,
         rag
     ]},
     {env, []},

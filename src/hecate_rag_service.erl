@@ -41,7 +41,9 @@ capabilities() ->
         #{name => <<"hecate-rag.search_chunks_semantic">>,  version => 1},
         #{name => <<"hecate-rag.list_chunks_by_source">>,   version => 1},
         #{name => <<"hecate-rag.get_source_by_id">>,        version => 1},
-        #{name => <<"hecate-rag.list_sources_page">>,       version => 1}
+        #{name => <<"hecate-rag.list_sources_page">>,       version => 1},
+        #{name => <<"hecate-rag.detect_corpus_change">>,    version => 1},
+        #{name => <<"hecate-rag.schedule_reembed">>,        version => 1}
     ].
 
 %% @doc Realm-issued service-principal scope. hecate-realm mints a

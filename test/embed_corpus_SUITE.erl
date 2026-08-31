@@ -20,12 +20,11 @@ all() ->
      embed_without_ingest_errors].
 
 init_per_suite(Config) ->
-    {ok, _} = application:ensure_all_started(hecate_rag),
+    ok = rag_test_helpers:start_hecate_rag(),
     Config.
 
 end_per_suite(_Config) ->
-    application:stop(hecate_rag),
-    ok.
+    rag_test_helpers:stop_hecate_rag().
 
 ingest_embed_search_prune_round_trip(_Config) ->
     DocId = fresh_id(),

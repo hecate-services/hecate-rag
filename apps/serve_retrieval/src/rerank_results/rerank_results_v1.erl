@@ -1,18 +1,25 @@
-%%% @doc Command `rerank_results_v1`.
+%%% @doc Command `rerank_results_v1'.
 %%%
-%%% Generated stub. Add validation in `maybe_rerank_results` once the slice
-%%% has real business rules.
+%%% Reshaped from the generated stub: the original `original_ranking ::
+%%% binary()' field was never a usable shape -- a caller has a LIST of
+%%% hits (the exact output of `search_chunks_semantic'/`answer_query':
+%%% `chunk_id'/`content'/`score'/`source_path'), not an opaque binary,
+%%% and reranking needs the original query text to compute anything new
+%%% against. Same kind of correction `answer_query''s own migration
+%%% already made to its command (see that module's doc comment) once
+%%% the generated stub's guessed shape met a real caller.
 -module(rerank_results_v1).
 -behaviour(evoq_command).
 
 -export([command_type/0]).
 -export([new/1, from_map/1, validate/1, to_map/1]).
 -export([stream_id/1]).
--export([get_query_id/1, get_original_ranking/1, get_reranker_model/1]).
+-export([get_query_id/1, get_query_text/1, get_hits/1, get_reranker_model/1]).
 
 -record(rerank_results_v1, {
     query_id :: binary() | undefined,
-    original_ranking :: binary() | undefined,
+    query_text :: binary() | undefined,
+    hits :: [map()] | undefined,
     reranker_model :: binary() | undefined
 }).
 
@@ -26,7 +33,8 @@ command_type() -> rerank_results_v1.
 new(#{query_id := Id} = Params) ->
     {ok, #rerank_results_v1{
         query_id = Id,
-        original_ranking = maps:get(original_ranking, Params, undefined),
+        query_text = maps:get(query_text, Params, undefined),
+        hits = maps:get(hits, Params, undefined),
         reranker_model = maps:get(reranker_model, Params, undefined)
     }};
 new(_) ->
@@ -36,14 +44,22 @@ new(_) ->
 from_map(#{<<"query_id">> := Id} = Map) ->
     {ok, #rerank_results_v1{
         query_id = Id,
-        original_ranking = maps:get(<<"original_ranking">>, Map, undefined),
+        query_text = maps:get(<<"query_text">>, Map, undefined),
+        hits = maps:get(<<"hits">>, Map, undefined),
         reranker_model = maps:get(<<"reranker_model">>, Map, undefined)
     }};
 from_map(_) ->
     {error, missing_aggregate_id}.
 
+%% `query_text'/`hits' are both load-bearing for `maybe_rerank_results'
+%% (nothing to score against, and nothing to reorder, without them).
+%% `reranker_model' stays optional -- see that module's own doc comment
+%% for why it's informational today, not yet a real choice of method.
 -spec validate(t()) -> ok | {error, term()}.
-validate(#rerank_results_v1{query_id = undefined}) -> {error, missing_aggregate_id};
+validate(#rerank_results_v1{query_id = undefined})    -> {error, missing_aggregate_id};
+validate(#rerank_results_v1{query_text = undefined})  -> {error, missing_query_text};
+validate(#rerank_results_v1{hits = undefined})         -> {error, missing_hits};
+validate(#rerank_results_v1{hits = Hits}) when not is_list(Hits) -> {error, hits_must_be_a_list};
 validate(_) -> ok.
 
 -spec to_map(t()) -> map().
@@ -51,7 +67,8 @@ to_map(#rerank_results_v1{} = Cmd) ->
     #{
         command_type => rerank_results_v1,
         query_id => Cmd#rerank_results_v1.query_id,
-        original_ranking => Cmd#rerank_results_v1.original_ranking,
+        query_text => Cmd#rerank_results_v1.query_text,
+        hits => Cmd#rerank_results_v1.hits,
         reranker_model => Cmd#rerank_results_v1.reranker_model
     }.
 
@@ -62,8 +79,11 @@ stream_id(#rerank_results_v1{query_id = Id}) ->
 -spec get_query_id(t()) -> binary() | undefined.
 get_query_id(#rerank_results_v1{query_id = V}) -> V.
 
--spec get_original_ranking(t()) -> binary() | undefined.
-get_original_ranking(#rerank_results_v1{original_ranking = V}) -> V.
+-spec get_query_text(t()) -> binary() | undefined.
+get_query_text(#rerank_results_v1{query_text = V}) -> V.
+
+-spec get_hits(t()) -> [map()] | undefined.
+get_hits(#rerank_results_v1{hits = V}) -> V.
 
 -spec get_reranker_model(t()) -> binary() | undefined.
 get_reranker_model(#rerank_results_v1{reranker_model = V}) -> V.
