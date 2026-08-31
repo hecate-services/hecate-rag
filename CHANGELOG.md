@@ -5,6 +5,8 @@ Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-31
+
 ### Fixed (found preparing the first real fleet deployment; v0.1.0 could not have run there)
 - `config/sys.config` was a plain, hardcoded file -- no `${VAR}` templating,
   and `rebar.config`'s `relx` block never set `sys_config_src`/`vm_args_src`,
