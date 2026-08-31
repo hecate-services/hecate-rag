@@ -5,6 +5,18 @@ Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-31
+
+### Changed
+- Bumped `hecate_om` dependency `~> 0.10` -> `~> 0.16` (resolves 0.16.4).
+  Was 6 minor versions behind; 0.16.1-0.16.3 add diagnostic logging for
+  skipped capability advertisement (pool/keypair/realm) that would have
+  made the v0.1.1 identity_key_path bug hunt immediate instead of hours.
+- `cowboy` left at `~> 2.12.0` -- hecate_om's own `rebar.config` still
+  pins cowboy `~> 2.12.0` even at 0.16.4 (hex latest is 2.18.0), and
+  asking for newer here deadlocks rebar3's resolver (cowlib version
+  conflict). Not fixable from this repo; flagged, not fixed.
+
 ## [0.1.1] - 2026-08-31
 
 ### Fixed (found preparing the first real fleet deployment; v0.1.0 could not have run there)
