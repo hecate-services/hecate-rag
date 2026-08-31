@@ -5,6 +5,34 @@ Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-01
+
+### Added
+- **Topic classification**: new `classify_topics` capability (13th mesh
+  procedure). Classifies a document's chunks into 1-5 topic labels via
+  an LLM API (NVIDIA NIM, OpenAI-compatible, free tier). Two modes:
+  `document` (1 API call, tags all chunks with the same set) and
+  `per_chunk` (N calls, per-chunk precision).
+- **Topic-filtered search**: `search_chunks_semantic` now accepts an
+  optional `<<"topics">> => [binary()]` param. Over-fetches 3x `top_k`
+  from the vector index, post-filters by topic intersection, returns
+  `top_k` filtered results.
+- `rag_store:tag_chunk/2` — merges topic labels into an existing chunk's
+  barrel document (metadata-only write, no re-embed).
+- `<<"topics">>` added to barrel's `metadata_fields` for indexing.
+- NVIDIA NIM config (`topic_classifier`) in dev.config (enabled) and
+  sys.config.src (enabled, key from `HECATE_TOPIC_API_KEY` env var).
+- `classify_topics_SUITE`: 23 unit + integration tests (command
+  validation, response parsing, storage, handler, search filter, mesh
+  RPC route). E2E verified against the real NVIDIA API.
+- `meck` added as a test-only dependency for mocking.
+
+### Changed
+- Switched HTTP client from `hackney` to `httpc` (Erlang/OTP built-in)
+  for the topic classifier — hackney's TLS connection pool could not
+  reach `integrate.api.nvidia.com` (`gen_statem connect` timeout).
+- Bumped version to 0.1.3.
+
 ## [0.1.2] - 2026-08-31
 
 ### Changed
