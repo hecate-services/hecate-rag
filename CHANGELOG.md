@@ -5,6 +5,15 @@ Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-01
+
+### Changed
+- Picked up `hecate_om` 0.16.5 (already permitted by `~> 0.16`, no
+  rebar.config change needed), which picks up `reckon_db` 5.11.1:
+  `read_all_global/3` no longer re-scans and re-sorts the entire event
+  store on every paginated catch-up call. Affects any store this
+  service opens with real accumulated volume on restart.
+
 ## [0.1.3] - 2026-09-01
 
 ### Added
