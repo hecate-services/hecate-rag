@@ -45,6 +45,7 @@
     start_link/0,
     put_chunk/3,
     forget_chunk/1,
+    tag_chunk/2,
     search_text/2,
     search_vector/2,
     get/1,
@@ -88,6 +89,14 @@ put_chunk(ChunkId, Content, Meta)
 -spec forget_chunk(binary()) -> ok | {error, term()}.
 forget_chunk(ChunkId) when is_binary(ChunkId) ->
     gen_server:call(?MODULE, {forget_chunk, ChunkId}).
+
+%% @doc Tag an existing chunk with topic labels. Merges `Topics' into
+%% the chunk's document metadata (under `<<"topics">>') using the same
+%% upsert-with-rev pattern as `put_chunk'. The chunk must already
+%% exist — this is an enrichment step, not a creation step.
+-spec tag_chunk(binary(), [binary()]) -> ok | {error, term()}.
+tag_chunk(ChunkId, Topics) when is_binary(ChunkId), is_list(Topics) ->
+    gen_server:call(?MODULE, {tag_chunk, ChunkId, Topics}).
 
 -spec search_text(binary(), pos_integer()) -> {ok, [map()]} | {error, term()}.
 search_text(QueryText, TopK)
@@ -183,6 +192,9 @@ handle_call({put_chunk, Id, Content, Meta}, _From, S0) ->
 handle_call({forget_chunk, Id}, _From, S0) ->
     with_db(S0, fun(Db) -> normalize_write(barrel:delete_doc(Db, Id)) end);
 
+handle_call({tag_chunk, ChunkId, Topics}, _From, S0) ->
+    with_db(S0, fun(Db) -> tag_chunk_doc(Db, ChunkId, Topics) end);
+
 handle_call({search_text, QueryText, TopK}, _From, S0) ->
     with_db(S0, fun(Db) -> to_hits(barrel:search(Db, QueryText, #{k => TopK})) end);
 
@@ -272,7 +284,8 @@ open_db() ->
             embedder => embedder(),
             dimensions => configured_dim(),
             metadata_fields => [<<"source_path">>, <<"header_path">>, <<"kind">>,
-                                <<"start_line">>, <<"end_line">>, <<"type">>]
+                                <<"start_line">>, <<"end_line">>, <<"type">>,
+                                <<"topics">>]
         }
     }).
 
@@ -343,6 +356,20 @@ put_doc_with_current_rev(Db, Id, Doc) ->
     case barrel:get_doc(Db, Id) of
         {ok, #{<<"_rev">> := Rev}} -> barrel:put_doc(Db, Doc#{<<"_rev">> => Rev});
         {error, _} = E             -> E
+    end.
+
+%% Merge `Topics' into an existing chunk document's metadata. Reads
+%% the current doc (for its _rev), adds `<<"topics">>`, writes back.
+%% Does NOT touch `<<"content">>` or `<<"_embedding">>` — barrel's
+%% embedding policy only triggers on content changes, so this metadata-
+%% only update does not re-embed.
+tag_chunk_doc(Db, ChunkId, Topics) ->
+    case barrel:get_doc(Db, ChunkId) of
+        {ok, Doc} ->
+            Updated = Doc#{<<"topics">> => Topics},
+            normalize_write(put_doc_upsert(Db, ChunkId, Updated));
+        {error, _} = E ->
+            E
     end.
 
 json_shape(Map) ->

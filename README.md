@@ -34,6 +34,7 @@ Advertised onto the mesh bloom-channel and discoverable by name:
 |------------|-------------|
 | `hecate-rag.ingest_document` | Take a document, chunk it, embed it, store |
 | `hecate-rag.embed_document` | (Re-)embed an already-ingested doc |
+| `hecate-rag.classify_topics` | Classify a document's chunks into topic labels (LLM-backed, optional) |
 | `hecate-rag.prune_chunks` | Remove a document's chunks from the index |
 | `hecate-rag.answer_query` | Top-k retrieval against the index |
 | `hecate-rag.rerank_results` | Rerank a set of hits (semantic + lexical blend) against a query |

@@ -19,7 +19,7 @@
 %% `application:stop/1' returning is not proof the OS has released the
 %% ranch listener's TCP port yet -- give it a beat before the NEXT
 %% suite's own `start_hecate_rag/0' tries to bind the same one.
--define(POST_STOP_SETTLE_MS, 500).
+-define(POST_STOP_SETTLE_MS, 10000).
 
 -spec start_hecate_rag() -> ok.
 start_hecate_rag() ->

@@ -34,8 +34,9 @@ capabilities() ->
     [
         #{name => <<"hecate-rag.ingest_document">>,         version => 1},
         #{name => <<"hecate-rag.embed_document">>,          version => 1},
+        #{name => <<"hecate-rag.classify_topics">>,         version => 1},
         #{name => <<"hecate-rag.prune_chunks">>,            version => 1},
-        #{name => <<"hecate-rag.answer_query">>,            version => 1},
+        #{name => <<"hecate-rag.answer_query">>,           version => 1},
         #{name => <<"hecate-rag.rerank_results">>,          version => 1},
         #{name => <<"hecate-rag.get_chunk_by_id">>,         version => 1},
         #{name => <<"hecate-rag.search_chunks_semantic">>,  version => 1},

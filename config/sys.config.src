@@ -21,7 +21,20 @@
         %% with one dimension cannot be queried with vectors from the
         %% other.
         {embed_provider, hecate_embedder},
-        {embed_dim,       384}
+        {embed_dim,       384},
+
+        %% LLM-backed topic classification via NVIDIA NIM (free tier,
+        %% OpenAI-compatible API). The model can be swapped to any
+        %% OpenAI-compatible endpoint by changing `endpoint' + `model'
+        %% — no vendor lock-in. Enabled by default; disable per
+        %% deployment by omitting HECATE_TOPIC_API_KEY.
+        {topic_classifier, #{
+            enabled  => true,
+            api_key  => <<"${HECATE_TOPIC_API_KEY}">>,
+            endpoint => <<"https://integrate.api.nvidia.com/v1/chat/completions">>,
+            model    => <<"minimaxai/minimax-m3">>,
+            timeout  => 30000
+        }}
     ]},
 
     {hecate_om, [
