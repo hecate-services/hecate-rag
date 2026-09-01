@@ -3,6 +3,29 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.11] - 2026-09-01
+
+### Changed (diagnostic, not a fix)
+
+- Reordered `hecate_rag_service:capabilities()` -- `get_document_verbatim`
+  moved from 14th of 16 to 1st. Live experiment: 0.1.10's hecate_om
+  bump did NOT resolve `get_document_verbatim` staying `unknown_method`
+  even on a fresh boot with a stable node identity, ruling out the
+  tombstone-race theory (same-source re-registration always passes
+  `macula_remote_advertise_registry`'s carve-out, regardless of
+  timing). Calling both through the default station and directly
+  through hecate-rag's own configured seed station
+  (`station-it-milan.macula.io`) fails identically, ruling out
+  inter-station gossip lag too. Remaining hypothesis: a boot-time
+  ADVERTISE burst (32 wire frames -- 16 capabilities x bare +
+  org-qualified -- sent back-to-back via `advertise_one/7`'s
+  `lists:foldl`) hits a station-side or SDK-side rate limit around
+  this capability's position, silently, since `hecate_om_capabilities`
+  only knows the frame was sent, not that the station indexed it. If
+  breakage follows the position (`ingest_document`, now 14th, breaks
+  instead) that confirms it. Revert this reorder once the result is
+  known.
+
 ## [0.1.10] - 2026-09-01
 
 ### Fixed
