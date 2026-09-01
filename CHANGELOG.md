@@ -3,6 +3,21 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.17] - 2026-09-01
+
+### Fixed
+
+- Bumped `hecate_om` `0.20.0` -> `0.21.0` (now published to hex) and
+  `macula` `10.14.4` -> `10.14.5` (transitive, also published). This is
+  the release that actually closes the live `noproc` incident diagnosed
+  in 0.1.15: `hecate_om` 0.21.0 isolates one capability's timed-out
+  advertise call so it can no longer crash the whole registration
+  process and cascade into killing every other capability's factory
+  supervisor; `macula` 10.14.5 independently hardens the same failure
+  class one layer down (a reused supervisor pid is checked for liveness
+  before being trusted). `rebar3 compile`, `rebar3 eunit` (17/17), and
+  `rebar3 lint` all clean against the bumped deps.
+
 ## [0.1.16] - 2026-09-01
 
 ### Fixed
