@@ -3,6 +3,19 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.13] - 2026-09-01
+
+### Changed (temporary diagnostic, to be reverted)
+
+- `handle_get_document_verbatim/1` logs its raw incoming payload
+  (`logger:warning`). v0.1.12's `hecate_om_wire:field/2` fix, verified
+  correct in isolation for both atom- and binary-keyed input, still
+  does not resolve the live symptom -- calls now reach real code
+  (`missing_source_path`/`missing_id` instead of `unknown_method`) but
+  the field still isn't found, meaning the live payload's actual shape
+  differs from what was assumed. This logs the real shape to settle it
+  directly instead of theorizing further.
+
 ## [0.1.12] - 2026-09-01
 
 ### Fixed
