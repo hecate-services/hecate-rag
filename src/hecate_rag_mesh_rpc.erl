@@ -29,6 +29,8 @@
     %% Handlers — invoked by the SDK on inbound RPC. One per capability.
     handle_ingest_document/1,
     handle_embed_document/1,
+    handle_upload_knowledge/1,
+    handle_add_knowledge/1,
     handle_classify_topics/1,
     handle_prune_chunks/1,
     handle_answer_query/1,
@@ -92,6 +94,8 @@ handler_table() ->
     [
         {<<"hecate-rag.ingest_document">>,        handle_ingest_document},
         {<<"hecate-rag.embed_document">>,         handle_embed_document},
+        {<<"hecate-rag.upload_knowledge">>,       handle_upload_knowledge},
+        {<<"hecate-rag.add_knowledge">>,          handle_add_knowledge},
         {<<"hecate-rag.classify_topics">>,        handle_classify_topics},
         {<<"hecate-rag.prune_chunks">>,           handle_prune_chunks},
         {<<"hecate-rag.answer_query">>,           handle_answer_query},
@@ -109,6 +113,8 @@ handler_table() ->
 
 handle_ingest_document(P)        -> route(<<"hecate-rag.ingest_document">>, P).
 handle_embed_document(P)         -> route(<<"hecate-rag.embed_document">>, P).
+handle_upload_knowledge(P)       -> route(<<"hecate-rag.upload_knowledge">>, P).
+handle_add_knowledge(P)          -> route(<<"hecate-rag.add_knowledge">>, P).
 handle_classify_topics(P)        -> route(<<"hecate-rag.classify_topics">>, P).
 handle_prune_chunks(P)           -> route(<<"hecate-rag.prune_chunks">>, P).
 handle_answer_query(P)           -> route(<<"hecate-rag.answer_query">>, P).
@@ -127,6 +133,10 @@ route(<<"hecate-rag.ingest_document">>, P) ->
     maybe_ingest_document:ingest(P);
 route(<<"hecate-rag.embed_document">>, P) ->
     maybe_embed_document:embed(P);
+route(<<"hecate-rag.upload_knowledge">>, P) ->
+    maybe_upload_knowledge:upload(P);
+route(<<"hecate-rag.add_knowledge">>, P) ->
+    maybe_add_knowledge:add(P);
 route(<<"hecate-rag.classify_topics">>, P) ->
     maybe_classify_topics:classify(P);
 route(<<"hecate-rag.prune_chunks">>, P) ->

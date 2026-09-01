@@ -11,7 +11,7 @@
 info() ->
     #{
         name        => <<"hecate-rag">>,
-        version     => <<"0.1.4">>,
+        version     => <<"0.1.5">>,
         description => <<"Realm-bound RAG service: retrieval over the configured corpora">>
     }.
 
@@ -34,6 +34,8 @@ capabilities() ->
     [
         #{name => <<"hecate-rag.ingest_document">>,         version => 1},
         #{name => <<"hecate-rag.embed_document">>,          version => 1},
+        #{name => <<"hecate-rag.upload_knowledge">>,        version => 1},
+        #{name => <<"hecate-rag.add_knowledge">>,           version => 1},
         #{name => <<"hecate-rag.classify_topics">>,         version => 1},
         #{name => <<"hecate-rag.prune_chunks">>,            version => 1},
         #{name => <<"hecate-rag.answer_query">>,           version => 1},

@@ -5,6 +5,44 @@ Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-09-01
+
+### Added
+- **`upload_knowledge` capability**: raw file → chunk → embed → store,
+  entirely server-side. The caller sends raw bytes; the server chunks
+  via `markdown_chunker`, embeds via `rag_embedder` (in the caller's
+  process, not inside `rag_store`'s gen_server), and writes each chunk
+  with its vector. Mesh RPC + HTTP API.
+- **`add_knowledge` capability**: text snippet → chunk → embed → store,
+  for conversational deposits. Handles short text that the chunker
+  would skip (under 80 bytes) by creating a single chunk directly.
+  Optional `topics` field tags chunks after storing. Mesh RPC + HTTP API.
+- `rag_embedder`: facade for embedding text outside the gen_server.
+  Delegates to `rag_embed_hecate_embedder` (mesh) or `barrel_embed_ollama`
+  (local), matching the existing provider config.
+- `rag_chunk_embedder`: worker that embeds chunks via `rag_embedder`
+  and writes to `rag_store:put_chunk_with_vector/4`.
+- `rag_store:put_chunk_with_vector/4`: writes a chunk with a pre-computed
+  `_embedding` vector. Barrel indexes it synchronously without calling
+  the embedder — a fast barrel write + HNSW insert.
+
+### Changed
+- **`rag_store` no longer blocks on embedding.** Barrel's embedding
+  policy now has `fields => []` — barrel never auto-embeds. All
+  embedding is application-layer: callers compute vectors via
+  `rag_embedder` and pass them to `put_chunk_with_vector/4`. The
+  gen_server only does fast barrel reads/writes, never an outbound
+  mesh call.
+- **`rag_store:search_text/2`** is no longer a gen_server call. It
+  embeds the query via `rag_embedder` in the caller's process, then
+  delegates to `search_vector/2` (a fast gen_server call). This keeps
+  the gen_server responsive even when the embedder is slow.
+- Added `inets` and `ssl` to `hecate_rag.app.src` applications
+  (required by `rag_topic_classifier`'s `httpc` calls).
+- `knowledge_pipeline_SUITE`: 14 tests for upload_knowledge,
+  add_knowledge, put_chunk_with_vector, store responsiveness, and
+  mesh RPC routes.
+
 ## [0.1.4] - 2026-09-01
 
 ### Changed

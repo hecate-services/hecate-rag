@@ -2,34 +2,33 @@
 %%%
 %%% One `barrel' record-mode database (`barrel_docdb' + `barrel_vectordb'
 %%% composed behind one handle, see beam-campus/barrel): a chunk's content,
-%%% metadata and vector all live under its `chunk_id', kept in sync
-%%% automatically by barrel's embedding policy — `put_chunk/3' never
-%%% computes or passes a vector itself. Source records (one per ingested
-%%% document) share the same database as a second, unembedded document
-%%% shape, distinguished by a `type' field and an id prefix so a
-%%% `document_id' can never collide with a `chunk_id' in the same id space.
+%%% metadata and vector all live under its `chunk_id'.
 %%%
-%%% Replaces the former esqlite (chunks/sources SQL tables) + hecate_vector
-%%% (brute-force ANN scaffold, no working persistence) + hecate_embed
-%%% (separate embed-then-store calls) combination: one dependency instead
-%%% of three, and no hand-paired "SQL row here, vector there" bookkeeping
-%%% for delete to get wrong.
+%%% **Embedding is application-layer, not barrel-managed.** The embedding
+%%% policy has `fields => []' — barrel never auto-embeds. Callers compute
+%%% vectors via `rag_embedder' (in their own process, not inside this
+%%% gen_server) and pass them to `put_chunk_with_vector/4'. This keeps
+%%% the gen_server fast: every call is a barrel read/write, never an
+%%% outbound mesh call that could block for 30s.
+%%%
+%%% `search_text/2' is NOT a gen_server call — it embeds the query via
+%%% `rag_embedder' in the caller's process, then delegates to
+%%% `search_vector/2' (which IS a gen_server call, fast).
 %%%
 %%% Write paths:
 %%%
-%%%   - `put_chunk/3' — called directly by `ingest_document'/`embed_document'
-%%%     and by `seed_corpus'. No event sourcing: chunks/vectors are a
-%%%     deterministic function of (source text, chunker, embedding model),
-%%%     not a business fact anyone decided, so there is nothing here worth
-%%%     replaying from history.
+%%%   - `put_chunk_with_vector/4' — primary write path: content + meta
+%%%     + pre-computed vector. Barrel indexes the vector synchronously.
+%%%   - `put_chunk/3' — content + meta only, NO vector. Stored but not
+%%%     in the vector index until a vector is added via `tag_chunk/2'
+%%%     or a re-embed. Kept for backward compat.
 %%%   - `forget_chunk/1' — called directly by `prune_chunks'.
 %%%   - `upsert_source/1' — called directly by `ingest_document'.
 %%%
 %%% Read paths:
 %%%
-%%%   - `search_text/2' — semantic search from a query string; barrel
-%%%     embeds the query itself.
-%%%   - `search_vector/2' — semantic search from an already-computed vector.
+%%%   - `search_text/2' — embeds query externally, then vector search.
+%%%   - `search_vector/2' — vector search (gen_server call, fast).
 %%%   - `get/1' — `get_chunk_by_id'.
 %%%   - `list_chunks_by_source/2' — `list_chunks_by_source'.
 %%%   - `get_source/1' — `get_source_by_id'.
@@ -44,6 +43,7 @@
 -export([
     start_link/0,
     put_chunk/3,
+    put_chunk_with_vector/4,
     forget_chunk/1,
     tag_chunk/2,
     search_text/2,
@@ -76,15 +76,24 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-%% @doc Insert or replace a chunk. `Meta' carries whatever
-%% `markdown_chunker' attached (source_path, header_path, kind, start_line,
-%% end_line) plus anything else the caller wants searchable in hit
-%% metadata — barrel embeds `content' per the configured policy, no vector
-%% is computed or passed here.
+%% @doc Insert or replace a chunk WITHOUT a vector. The chunk is stored
+%% but NOT in the vector index — it won't be found by semantic search
+%% until a vector is added (via `put_chunk_with_vector/4' or a re-embed).
+%% Kept for backward compat; new code should use `put_chunk_with_vector/4'.
 -spec put_chunk(binary(), binary(), map()) -> ok | {error, term()}.
 put_chunk(ChunkId, Content, Meta)
   when is_binary(ChunkId), is_binary(Content), is_map(Meta) ->
     gen_server:call(?MODULE, {put_chunk, ChunkId, Content, Meta}).
+
+%% @doc Insert or replace a chunk with a pre-computed embedding vector.
+%% This is the primary write path: the caller embeds content in their
+%% own process (via `rag_embedder') and passes the vector here. The
+%% gen_server does a fast barrel write + synchronous vector index —
+%% no outbound mesh call, no blocking.
+-spec put_chunk_with_vector(binary(), binary(), map(), [float()]) -> ok | {error, term()}.
+put_chunk_with_vector(ChunkId, Content, Meta, Vector)
+  when is_binary(ChunkId), is_binary(Content), is_map(Meta), is_list(Vector) ->
+    gen_server:call(?MODULE, {put_chunk_with_vector, ChunkId, Content, Meta, Vector}).
 
 -spec forget_chunk(binary()) -> ok | {error, term()}.
 forget_chunk(ChunkId) when is_binary(ChunkId) ->
@@ -98,10 +107,17 @@ forget_chunk(ChunkId) when is_binary(ChunkId) ->
 tag_chunk(ChunkId, Topics) when is_binary(ChunkId), is_list(Topics) ->
     gen_server:call(?MODULE, {tag_chunk, ChunkId, Topics}).
 
+%% @doc Semantic search from a query string. Embeds the query via
+%% `rag_embedder' in the CALLER's process (not inside the gen_server),
+%% then delegates to `search_vector/2' — a fast gen_server call.
+%% This keeps the gen_server responsive even when the embedder is slow.
 -spec search_text(binary(), pos_integer()) -> {ok, [map()]} | {error, term()}.
 search_text(QueryText, TopK)
   when is_binary(QueryText), is_integer(TopK), TopK > 0 ->
-    gen_server:call(?MODULE, {search_text, QueryText, TopK}).
+    case rag_embedder:embed(QueryText) of
+        {ok, Vector} -> search_vector(Vector, TopK);
+        {error, _} = E -> E
+    end.
 
 -spec search_vector([float()], pos_integer()) -> {ok, [map()]} | {error, term()}.
 search_vector(Vector, TopK)
@@ -189,14 +205,14 @@ init([]) ->
 handle_call({put_chunk, Id, Content, Meta}, _From, S0) ->
     with_db(S0, fun(Db) -> put_chunk_doc(Db, Id, Content, Meta) end);
 
+handle_call({put_chunk_with_vector, Id, Content, Meta, Vector}, _From, S0) ->
+    with_db(S0, fun(Db) -> put_chunk_with_vector_doc(Db, Id, Content, Meta, Vector) end);
+
 handle_call({forget_chunk, Id}, _From, S0) ->
     with_db(S0, fun(Db) -> normalize_write(barrel:delete_doc(Db, Id)) end);
 
 handle_call({tag_chunk, ChunkId, Topics}, _From, S0) ->
     with_db(S0, fun(Db) -> tag_chunk_doc(Db, ChunkId, Topics) end);
-
-handle_call({search_text, QueryText, TopK}, _From, S0) ->
-    with_db(S0, fun(Db) -> to_hits(barrel:search(Db, QueryText, #{k => TopK})) end);
 
 handle_call({search_vector, Vector, TopK}, _From, S0) ->
     with_db(S0, fun(Db) -> to_hits(barrel:search_vector(Db, Vector, #{k => TopK})) end);
@@ -274,12 +290,16 @@ reply_result(Result, State) -> {reply, Result, State}.
 %% backed and does reload/rebuild its HNSW index from persisted
 %% metadata on open (see load_or_create_index/4 there) -- this was a
 %% pure missing-config bug on this side, not a real barrel limitation.
+%% `fields => []' — barrel never auto-embeds. All embedding is
+%% application-layer: callers compute vectors via `rag_embedder' and
+%% pass them to `put_chunk_with_vector/4'. This keeps the gen_server
+%% fast (no outbound mesh calls inside handle_call).
 open_db() ->
     barrel:open(?DB_NAME, #{
         docdb => #{data_dir => data_dir()},
         vectordb => #{db_path => vector_data_dir()},
         embedding => #{
-            fields => [<<"content">>],
+            fields => [],
             mode => sync,
             embedder => embedder(),
             dimensions => configured_dim(),
@@ -328,6 +348,16 @@ to_bin(L) when is_list(L)   -> list_to_binary(L).
 put_chunk_doc(Db, Id, Content, Meta) ->
     Shaped = json_shape(Meta),
     Doc = Shaped#{<<"id">> => Id, <<"content">> => Content},
+    normalize_write(put_doc_upsert(Db, Id, Doc)).
+
+%% Write a chunk with a pre-computed embedding. The `<<"_embedding">>'
+%% field is recognized by barrel as a client-supplied vector
+%% (`EMBEDDING_SRC_CLIENT'), so barrel indexes it synchronously without
+%% calling the embedder — a fast barrel write + HNSW insert, no mesh call.
+put_chunk_with_vector_doc(Db, Id, Content, Meta, Vector) ->
+    Shaped = json_shape(Meta),
+    Doc = Shaped#{<<"id">> => Id, <<"content">> => Content,
+                  <<"_embedding">> => Vector},
     normalize_write(put_doc_upsert(Db, Id, Doc)).
 
 %% barrel requires the current `_rev' on the Doc map to update an

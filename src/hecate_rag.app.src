@@ -1,12 +1,14 @@
 {application, hecate_rag, [
     {description, "Realm-bound RAG service daemon"},
-    {vsn, "0.1.4"},
+    {vsn, "0.1.5"},
     {registered, []},
     {mod, {hecate_rag_app, []}},
     {applications, [
         kernel,
         stdlib,
         crypto,
+        inets,
+        ssl,
         cowboy,
         reckon_db,
         reckon_gater,
