@@ -14,7 +14,7 @@
 %%% not from anything about the code under test.
 -module(rag_test_helpers).
 
--export([start_hecate_rag/0, stop_hecate_rag/0]).
+-export([start_hecate_rag/0, stop_hecate_rag/0, write_repos_config/2]).
 
 %% `application:stop/1' returning is not proof the OS has released the
 %% ranch listener's TCP port yet -- give it a beat before the NEXT
@@ -31,3 +31,19 @@ stop_hecate_rag() ->
     _ = application:stop(hecate_rag),
     timer:sleep(?POST_STOP_SETTLE_MS),
     ok.
+
+%% @doc Writes a `corpus_repos_config'-shaped JSON fixture at `Path'.
+%% Each repo map needs `id'/`url'; `branch' is optional. Shared by any
+%% suite that needs `corpus_git_sync'/`refresh_corpus_scheduler' to see
+%% a specific repo list, since both read the exact same file shape.
+-spec write_repos_config(file:filename_all(), [map()]) -> ok | {error, term()}.
+write_repos_config(Path, Repos) ->
+    Json = jsx:encode(#{<<"repos">> => [repo_json(R) || R <- Repos]}),
+    file:write_file(Path, Json).
+
+repo_json(#{id := Id, url := Url} = R) ->
+    Base = #{<<"id">> => Id, <<"url">> => Url},
+    add_branch(maps:get(branch, R, undefined), Base).
+
+add_branch(undefined, Base) -> Base;
+add_branch(Branch, Base)    -> Base#{<<"branch">> => Branch}.

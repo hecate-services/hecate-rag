@@ -69,6 +69,22 @@
 -define(WATERMARK_ID_PREFIX, "watermark:").
 -define(REEMBED_ID_PREFIX, "reembed:").
 
+%% The default gen_server:call/2 timeout (5000ms) is too short for this
+%% store under real load: barrel's own record-mode embedding policy
+%% runs a real mesh round-trip to the configured embedder INSIDE
+%% put_chunk/3's handle_call clause, so a burst of writes (e.g.
+%% refresh_corpus_scheduler's first-ever pass over a whole unwatermarked
+%% corpus) serializes through this one gen_server, and an unrelated
+%% call queued behind them -- even a cheap read like get_watermark/2 --
+%% times out waiting its turn, not because anything is actually stuck.
+%% Verified live: refresh_corpus_scheduler crash-looped indefinitely on
+%% beam03 with {timeout, {gen_server, call, [rag_store, {get_watermark, ...}]}}
+%% on its very first tick against the real corpus, every 5 seconds,
+%% never completing a pass. 60s comfortably covers a real embedding
+%% backlog while still surfacing a genuine hang eventually, rather than
+%% waiting forever.
+-define(CALL_TIMEOUT, 60000).
+
 -record(state, {db = undefined :: map() | undefined}).
 
 %%% API
@@ -83,7 +99,7 @@ start_link() ->
 -spec put_chunk(binary(), binary(), map()) -> ok | {error, term()}.
 put_chunk(ChunkId, Content, Meta)
   when is_binary(ChunkId), is_binary(Content), is_map(Meta) ->
-    gen_server:call(?MODULE, {put_chunk, ChunkId, Content, Meta}).
+    gen_server:call(?MODULE, {put_chunk, ChunkId, Content, Meta}, ?CALL_TIMEOUT).
 
 %% @doc Insert or replace a chunk with a pre-computed embedding vector.
 %% This is the primary write path: the caller embeds content in their
@@ -93,11 +109,11 @@ put_chunk(ChunkId, Content, Meta)
 -spec put_chunk_with_vector(binary(), binary(), map(), [float()]) -> ok | {error, term()}.
 put_chunk_with_vector(ChunkId, Content, Meta, Vector)
   when is_binary(ChunkId), is_binary(Content), is_map(Meta), is_list(Vector) ->
-    gen_server:call(?MODULE, {put_chunk_with_vector, ChunkId, Content, Meta, Vector}).
+    gen_server:call(?MODULE, {put_chunk_with_vector, ChunkId, Content, Meta, Vector}, ?CALL_TIMEOUT).
 
 -spec forget_chunk(binary()) -> ok | {error, term()}.
 forget_chunk(ChunkId) when is_binary(ChunkId) ->
-    gen_server:call(?MODULE, {forget_chunk, ChunkId}).
+    gen_server:call(?MODULE, {forget_chunk, ChunkId}, ?CALL_TIMEOUT).
 
 %% @doc Tag an existing chunk with topic labels. Merges `Topics' into
 %% the chunk's document metadata (under `<<"topics">>') using the same
@@ -105,7 +121,7 @@ forget_chunk(ChunkId) when is_binary(ChunkId) ->
 %% exist — this is an enrichment step, not a creation step.
 -spec tag_chunk(binary(), [binary()]) -> ok | {error, term()}.
 tag_chunk(ChunkId, Topics) when is_binary(ChunkId), is_list(Topics) ->
-    gen_server:call(?MODULE, {tag_chunk, ChunkId, Topics}).
+    gen_server:call(?MODULE, {tag_chunk, ChunkId, Topics}, ?CALL_TIMEOUT).
 
 %% @doc Semantic search from a query string. Embeds the query via
 %% `rag_embedder' in the CALLER's process (not inside the gen_server),
@@ -122,15 +138,15 @@ search_text(QueryText, TopK)
 -spec search_vector([float()], pos_integer()) -> {ok, [map()]} | {error, term()}.
 search_vector(Vector, TopK)
   when is_list(Vector), is_integer(TopK), TopK > 0 ->
-    gen_server:call(?MODULE, {search_vector, Vector, TopK}).
+    gen_server:call(?MODULE, {search_vector, Vector, TopK}, ?CALL_TIMEOUT).
 
 -spec get(binary()) -> {ok, map()} | {error, not_found}.
 get(ChunkId) when is_binary(ChunkId) ->
-    gen_server:call(?MODULE, {get, ChunkId}).
+    gen_server:call(?MODULE, {get, ChunkId}, ?CALL_TIMEOUT).
 
 -spec size() -> non_neg_integer().
 size() ->
-    gen_server:call(?MODULE, size).
+    gen_server:call(?MODULE, size, ?CALL_TIMEOUT).
 
 %% @doc Record (or update) that a document has been ingested. Map keys:
 %% `document_id' (required), `source_path', `source_type', `raw_bytes'
@@ -139,30 +155,30 @@ size() ->
 %% ingested content lives between the two calls.
 -spec upsert_source(map()) -> ok | {error, term()}.
 upsert_source(#{document_id := Id} = Source) when is_binary(Id) ->
-    gen_server:call(?MODULE, {upsert_source, Source}).
+    gen_server:call(?MODULE, {upsert_source, Source}, ?CALL_TIMEOUT).
 
 %% @doc The public source row: id/path/type, no `raw_bytes' (kept out of
 %% the default shape the same way `chunk_meta/1' hides `_embedding' —
 %% derived/bulky fields are opt-in, not default).
 -spec get_source(binary()) -> {ok, map()} | {error, not_found}.
 get_source(DocumentId) when is_binary(DocumentId) ->
-    gen_server:call(?MODULE, {get_source, DocumentId}).
+    gen_server:call(?MODULE, {get_source, DocumentId}, ?CALL_TIMEOUT).
 
 %% @doc Internal use (`embed_document'): the source's `source_path' and
 %% `raw_bytes', to chunk. Not part of the public query surface.
 -spec get_source_content(binary()) -> {ok, map()} | {error, not_found}.
 get_source_content(DocumentId) when is_binary(DocumentId) ->
-    gen_server:call(?MODULE, {get_source_content, DocumentId}).
+    gen_server:call(?MODULE, {get_source_content, DocumentId}, ?CALL_TIMEOUT).
 
 -spec list_sources(non_neg_integer(), pos_integer()) -> {ok, [map()]}.
 list_sources(Offset, Limit)
   when is_integer(Offset), Offset >= 0, is_integer(Limit), Limit > 0 ->
-    gen_server:call(?MODULE, {list_sources, Offset, Limit}).
+    gen_server:call(?MODULE, {list_sources, Offset, Limit}, ?CALL_TIMEOUT).
 
 -spec list_chunks_by_source(binary(), pos_integer()) -> {ok, [map()]}.
 list_chunks_by_source(SourcePath, Limit)
   when is_binary(SourcePath), is_integer(Limit), Limit > 0 ->
-    gen_server:call(?MODULE, {list_chunks_by_source, SourcePath, Limit}).
+    gen_server:call(?MODULE, {list_chunks_by_source, SourcePath, Limit}, ?CALL_TIMEOUT).
 
 %% @doc The source record for a `source_path', regardless of which
 %% `document_id' it was ingested under -- `detect_corpus_change'/
@@ -175,19 +191,19 @@ list_chunks_by_source(SourcePath, Limit)
 %% detect).
 -spec find_source_by_path(binary()) -> {ok, map()} | {error, not_found}.
 find_source_by_path(SourcePath) when is_binary(SourcePath) ->
-    gen_server:call(?MODULE, {find_source_by_path, SourcePath}).
+    gen_server:call(?MODULE, {find_source_by_path, SourcePath}, ?CALL_TIMEOUT).
 
 %% @doc The last-recorded `diff_hash' for one `(corpus_id, source_path)'
 %% pair -- what `detect_corpus_change' compares a freshly-computed hash
 %% against to decide whether anything actually changed.
 -spec get_watermark(binary(), binary()) -> {ok, #{diff_hash := binary()}} | {error, not_found}.
 get_watermark(CorpusId, SourcePath) when is_binary(CorpusId), is_binary(SourcePath) ->
-    gen_server:call(?MODULE, {get_watermark, CorpusId, SourcePath}).
+    gen_server:call(?MODULE, {get_watermark, CorpusId, SourcePath}, ?CALL_TIMEOUT).
 
 -spec put_watermark(binary(), binary(), binary()) -> ok | {error, term()}.
 put_watermark(CorpusId, SourcePath, DiffHash)
   when is_binary(CorpusId), is_binary(SourcePath), is_binary(DiffHash) ->
-    gen_server:call(?MODULE, {put_watermark, CorpusId, SourcePath, DiffHash}).
+    gen_server:call(?MODULE, {put_watermark, CorpusId, SourcePath, DiffHash}, ?CALL_TIMEOUT).
 
 %% @doc Records a re-embed request. `Req' keys: `document_id',
 %% `corpus_id', `source_path' (required), `priority', `scheduled_at'
@@ -195,7 +211,7 @@ put_watermark(CorpusId, SourcePath, DiffHash)
 %% for what's deliberately not built here.
 -spec put_reembed_request(map()) -> {ok, #{request_id := binary()}} | {error, term()}.
 put_reembed_request(#{document_id := Id} = Req) when is_binary(Id) ->
-    gen_server:call(?MODULE, {put_reembed_request, Req}).
+    gen_server:call(?MODULE, {put_reembed_request, Req}, ?CALL_TIMEOUT).
 
 %%% gen_server
 

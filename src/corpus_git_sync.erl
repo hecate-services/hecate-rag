@@ -1,15 +1,16 @@
-%%% @doc Periodic corpus git-sync, replacing the external bash-script-
-%%% on-a-systemd-timer design. Every `?POLL_INTERVAL_MS' calls
-%%% `hecate_rag_corpus_sync_nif:sync/1' against the configured corpus
-%%% root (`corpus_root/0', app env `hecate_rag.corpus_root', defaulting
-%%% to `/corpus') -- fetch `origin', fast-forward if possible, via
-%%% vendored libgit2. No OS `git` binary involved, on the host or in
-%%% the container.
+%%% @doc Periodic corpus git-sync for every repo named in
+%%% `corpus_repos_config:read/0'. Every `?POLL_INTERVAL_MS', re-reads
+%%% that config file (cheap, and it's what lets a repo being added or
+%%% removed there take effect on this service's very next tick with no
+%%% restart) and calls `hecate_rag_corpus_sync_nif:clone_or_sync/3' for
+%%% each one -- clones it if its local path doesn't exist yet,
+%%% otherwise fetches `origin' and fast-forwards. No OS `git` binary
+%%% involved, on the host or in the container.
 %%%
 %%% Lives here (service-level infrastructure, per `hecate_rag_sup''s
 %%% own module doc), not inside `refresh_corpus': it calls
 %%% `hecate_rag_corpus_sync_nif', a top-level app module, and this
-%%% umbrella's own dependency direction runs from the top app into the
+%%% umbrella's dependency direction runs from the top app into the
 %%% sub-apps, never the reverse.
 %%%
 %%% Deliberately NOT coordinated with `refresh_corpus_scheduler' (the
@@ -17,9 +18,10 @@
 %%% "two independent, uncoordinated reconciliation loops, eventual
 %%% consistency" shape this fleet's own GitOps already uses elsewhere
 %%% (hecate-reconcile.timer + watchtower). This loop's only job is
-%%% keeping the checkout current with git; noticing that files changed
-%%% and re-embedding them is `refresh_corpus_scheduler''s own separate
-%%% concern, on its own separate timer.
+%%% keeping every configured checkout current with git; noticing that
+%%% files changed and re-embedding them is `refresh_corpus_scheduler''s
+%%% own separate concern, on its own separate timer, reading the same
+%%% config independently.
 -module(corpus_git_sync).
 -behaviour(gen_server).
 
@@ -28,21 +30,13 @@
 
 -define(POLL_INTERVAL_MS, 120000).
 
-%% Overridable so a test can point this at a fixture checkout instead of
-%% the real mount -- same convention `refresh_corpus_scheduler' uses.
-corpus_root() ->
-    application:get_env(hecate_rag, corpus_root, "/corpus").
-
 -spec start_link() -> {ok, pid()}.
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-%% @doc Force an immediate sync, bypassing the timer. Same return shape
-%% as `hecate_rag_corpus_sync_nif:sync/1', plus `{error, no_corpus_dir}'
-%% when nothing is mounted at the configured root.
--spec sync_now() ->
-    {ok, up_to_date | {fast_forwarded, binary(), binary()}} |
-    {error, no_corpus_dir | not_fast_forward | {git_error, binary()}}.
+%% @doc Force an immediate sync of every configured repo, bypassing the
+%% timer. Returns one result per repo, keyed by its configured id.
+-spec sync_now() -> #{binary() => term()}.
 sync_now() ->
     gen_server:call(?MODULE, sync_now, infinity).
 
@@ -74,26 +68,37 @@ schedule_tick(Delay) ->
     erlang:send_after(Delay, self(), tick).
 
 do_sync() ->
-    Root = corpus_root(),
-    sync_root(filelib:is_dir(Root), Root).
+    sync_repos(corpus_repos_config:read()).
 
-%% Not every deployment mounts a corpus -- report it, don't crash on a
-%% missing directory (same posture `refresh_corpus_scheduler' takes,
-%% though that one skips quietly since it ticks far more often relative
-%% to how rarely a corpus mount would actually be absent by mistake).
-sync_root(false, _Root) ->
-    {error, no_corpus_dir};
-sync_root(true, Root) ->
-    log_result(hecate_rag_corpus_sync_nif:sync(list_to_binary(Root))).
+%% A missing/invalid config file means nothing to sync -- report it,
+%% don't crash the whole gen_server over it (a fresh deployment with
+%% the config not mounted yet should stay up and simply do nothing
+%% until it is).
+sync_repos({error, Reason}) ->
+    logger:warning("[corpus_git_sync] config unreadable: ~p", [Reason]),
+    #{error => Reason};
+sync_repos({ok, Repos}) ->
+    maps:from_list([{maps:get(id, R), sync_one(R)} || R <- Repos]).
 
-log_result({ok, up_to_date} = R) ->
+%% ensure_dir(Path) creates Path's PARENT chain, deliberately not Path
+%% itself -- a fresh clone needs its own leaf directory to not already
+%% exist (the standard, well-supported case for a git clone target);
+%% an existing checkout's directory is already there either way.
+sync_one(#{id := Id, url := Url, branch := Branch, path := Path}) ->
+    ok = filelib:ensure_dir(Path),
+    log_result(Id, hecate_rag_corpus_sync_nif:clone_or_sync(Url, Path, Branch)).
+
+log_result(Id, {ok, cloned} = R) ->
+    logger:info("[corpus_git_sync] ~s: cloned", [Id]),
     R;
-log_result({ok, {fast_forwarded, From, To}} = R) ->
-    logger:info("[corpus_git_sync] fast-forwarded ~s -> ~s", [From, To]),
+log_result(_Id, {ok, up_to_date} = R) ->
     R;
-log_result({error, not_fast_forward} = R) ->
-    logger:warning("[corpus_git_sync] local checkout has diverged from origin -- left untouched"),
+log_result(Id, {ok, {fast_forwarded, From, To}} = R) ->
+    logger:info("[corpus_git_sync] ~s: fast-forwarded ~s -> ~s", [Id, From, To]),
     R;
-log_result({error, {git_error, Msg}} = R) ->
-    logger:warning("[corpus_git_sync] git error: ~ts", [Msg]),
+log_result(Id, {error, not_fast_forward} = R) ->
+    logger:warning("[corpus_git_sync] ~s: local checkout has diverged from origin -- left untouched", [Id]),
+    R;
+log_result(Id, {error, {git_error, Msg}} = R) ->
+    logger:warning("[corpus_git_sync] ~s: git error: ~ts", [Id, Msg]),
     R.

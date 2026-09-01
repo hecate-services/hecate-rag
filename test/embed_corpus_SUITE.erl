@@ -15,12 +15,14 @@
 -export([ingest_embed_search_prune_round_trip/1, sources_query_round_trip/1,
          embed_without_ingest_errors/1, seed_corpus_creates_verbatim_source/1,
          get_document_verbatim_round_trip/1,
-         refresh_scheduler_detects_and_refreshes_change/1]).
+         refresh_scheduler_detects_and_refreshes_change/1,
+         refresh_scheduler_namespaces_by_repo_to_avoid_collisions/1]).
 
 all() ->
     [ingest_embed_search_prune_round_trip, sources_query_round_trip,
      embed_without_ingest_errors, seed_corpus_creates_verbatim_source,
-     get_document_verbatim_round_trip, refresh_scheduler_detects_and_refreshes_change].
+     get_document_verbatim_round_trip, refresh_scheduler_detects_and_refreshes_change,
+     refresh_scheduler_namespaces_by_repo_to_avoid_collisions].
 
 init_per_suite(Config) ->
     ok = rag_test_helpers:start_hecate_rag(),
@@ -109,35 +111,86 @@ get_document_verbatim_round_trip(_Config) ->
                  get_document_verbatim:handle(<<"no-such-path.md">>)).
 
 %% refresh_corpus_scheduler:scan/0 is the internal half of the freshness
-%% loop (the external half -- keeping the corpus checkout in sync with
-%% git -- is a separate systemd timer, not exercised here). Points
-%% corpus_root at a fixture dir instead of the real /corpus mount.
+%% loop (the external half -- keeping each checkout in sync with git --
+%% is corpus_git_sync's own job, not exercised here). Points
+%% corpus_repos_config at a fixture repo list naming one fixture dir
+%% instead of a real cloned checkout -- scan/0 only reads files off
+%% disk, it doesn't care whether git put them there. `path' is never a
+%% JSON field, only ever derived (data_dir/corpus/id, see
+%% corpus_repos_config:clone_path/1), so the fixture data_dir has to
+%% be overridden too, and RepoDir computed the exact same way.
 refresh_scheduler_detects_and_refreshes_change(Config) ->
     DocId = fresh_id(),
-    RelPath = <<"refresh-scan-", DocId/binary, ".md">>,
+    RepoId = <<"refresh-repo-", DocId/binary>>,
+    RelPath = <<"corpus.md">>,
     TmpDir = ?config(priv_dir, Config),
-    AbsPath = filename:join(TmpDir, RelPath),
-    ok = application:set_env(hecate_rag, corpus_root, TmpDir),
+    DataDir = filename:join(TmpDir, <<"refresh-data-", DocId/binary>>),
+    RepoDir = filename:join([DataDir, "corpus", RepoId]),
+    ConfigPath = filename:join(TmpDir, <<"refresh-config-", DocId/binary, ".json">>),
+    NamespacedId = <<RepoId/binary, "/", RelPath/binary>>,
+    ok = filelib:ensure_dir(filename:join(RepoDir, ".")),
+    ok = rag_test_helpers:write_repos_config(ConfigPath, [#{id => RepoId, url => <<"unused">>}]),
+    ok = application:set_env(hecate_rag, corpus_repos_config, ConfigPath),
+    ok = application:set_env(hecate_rag, data_dir, DataDir),
 
+    AbsPath = filename:join(RepoDir, RelPath),
     Original = <<"# Before\n\nOriginal content.\n">>,
     ok = file:write_file(AbsPath, Original),
     ok = refresh_corpus_scheduler:scan(),
-    ?assertEqual({ok, #{source_path => RelPath, raw_bytes => Original}},
-                 rag_store:get_source_content(RelPath)),
+    ?assertEqual({ok, #{source_path => NamespacedId, raw_bytes => Original}},
+                 rag_store:get_source_content(NamespacedId)),
 
     %% Unchanged content -- a second scan is a no-op, same content still there.
     ok = refresh_corpus_scheduler:scan(),
-    ?assertEqual({ok, #{source_path => RelPath, raw_bytes => Original}},
-                 rag_store:get_source_content(RelPath)),
+    ?assertEqual({ok, #{source_path => NamespacedId, raw_bytes => Original}},
+                 rag_store:get_source_content(NamespacedId)),
 
     %% Changed content -- the next scan picks it up.
     Updated = <<"# After\n\nUpdated content, different bytes.\n">>,
     ok = file:write_file(AbsPath, Updated),
     ok = refresh_corpus_scheduler:scan(),
-    ?assertEqual({ok, #{source_path => RelPath, raw_bytes => Updated}},
-                 rag_store:get_source_content(RelPath)),
+    ?assertEqual({ok, #{source_path => NamespacedId, raw_bytes => Updated}},
+                 rag_store:get_source_content(NamespacedId)),
 
-    ok = application:unset_env(hecate_rag, corpus_root).
+    ok = application:unset_env(hecate_rag, corpus_repos_config),
+    ok = application:unset_env(hecate_rag, data_dir).
+
+%% The real reason document ids get repo-namespaced: two configured
+%% repos that both happen to have a same-named file must not collide
+%% in rag_store, which keys purely on document_id with no repo scoping
+%% of its own.
+refresh_scheduler_namespaces_by_repo_to_avoid_collisions(Config) ->
+    DocId = fresh_id(),
+    RepoA = <<"collide-a-", DocId/binary>>,
+    RepoB = <<"collide-b-", DocId/binary>>,
+    RelPath = <<"README.md">>,
+    TmpDir = ?config(priv_dir, Config),
+    DataDir = filename:join(TmpDir, <<"collide-data-", DocId/binary>>),
+    DirA = filename:join([DataDir, "corpus", RepoA]),
+    DirB = filename:join([DataDir, "corpus", RepoB]),
+    ConfigPath = filename:join(TmpDir, <<"collide-config-", DocId/binary, ".json">>),
+    ok = filelib:ensure_dir(filename:join(DirA, ".")),
+    ok = filelib:ensure_dir(filename:join(DirB, ".")),
+    ok = rag_test_helpers:write_repos_config(ConfigPath, [
+        #{id => RepoA, url => <<"unused">>},
+        #{id => RepoB, url => <<"unused">>}
+    ]),
+    ok = application:set_env(hecate_rag, corpus_repos_config, ConfigPath),
+    ok = application:set_env(hecate_rag, data_dir, DataDir),
+
+    ok = file:write_file(filename:join(DirA, RelPath), <<"# From A\n">>),
+    ok = file:write_file(filename:join(DirB, RelPath), <<"# From B\n">>),
+    ok = refresh_corpus_scheduler:scan(),
+
+    IdA = <<RepoA/binary, "/", RelPath/binary>>,
+    IdB = <<RepoB/binary, "/", RelPath/binary>>,
+    ?assertEqual({ok, #{source_path => IdA, raw_bytes => <<"# From A\n">>}},
+                 rag_store:get_source_content(IdA)),
+    ?assertEqual({ok, #{source_path => IdB, raw_bytes => <<"# From B\n">>}},
+                 rag_store:get_source_content(IdB)),
+
+    ok = application:unset_env(hecate_rag, corpus_repos_config),
+    ok = application:unset_env(hecate_rag, data_dir).
 
 %%% Internals
 

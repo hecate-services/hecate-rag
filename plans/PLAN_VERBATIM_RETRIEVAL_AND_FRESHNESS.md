@@ -1,6 +1,6 @@
 # Plan: Verbatim retrieval + corpus freshness
 
-**Status:** Phases 1-3 implemented and tested; not yet deployed (see
+**Status:** Phases 1-4 implemented and tested; not yet deployed (see
 "Remaining before this is live on beam03").
 **Created:** 2026-09-01
 **Last Updated:** 2026-09-01
@@ -197,6 +197,79 @@ proving the NIF loads for real inside `hecate_rag` and
 `corpus_git_sync`'s app-env override + gen_server plumbing work
 end to end.
 
+## Phase 4 — Multiple repos, config-driven, hecate-rag owns the clone — done
+
+**Resolved:** Phase 3 assumed exactly one already-cloned checkout at a
+fixed path, cloned there manually outside `hecate_rag`'s knowledge —
+not GitOps-declared, and no way to name a second repo. Generalized: a
+JSON config file (`corpus_repos_config` app env
+`hecate_rag.corpus_repos_config`, default `/etc/hecate-rag/corpus-repos.json`)
+lists `{id, url, branch}` per repo; `hecate_rag` clones each one itself
+(`hecate_rag_corpus_sync_nif:clone_or_sync/3`, new — the NIF's `sync/1`
+required a pre-existing checkout and is gone, replaced entirely) under
+`<data_dir>/corpus/<id>/`, derived, never a config field, so there's no
+way to misconfigure two repos onto the same path. Re-read from disk on
+every poll tick by both `corpus_git_sync` and `refresh_corpus_scheduler`
+(new shared module, `src/corpus_repos_config.erl`) rather than cached —
+adding or removing a repo from the file takes effect on the very next
+tick of both loops, no restart. The file itself is bind-mounted from
+`macula-demo/infrastructure/beam03.lab/hecate-rag-corpus-repos.json`,
+git-tracked, pulled automatically by `hecate-reconcile.timer` — editing
+it and pushing is the entire "add a repo" operation now.
+
+`document_id`/`source_path` for anything discovered this way became
+`<<RepoId/binary, "/", RelPath/binary>>`, not the bare relative path:
+`rag_store` keys its source storage on `document_id` alone with no
+repo-scoping of its own, so two configured repos sharing a same-named
+file would otherwise silently overwrite each other's record.
+**Contract-visible**: `hecate-rag.get_document_verbatim` now needs
+`"<repo-id>/<relative-path>"`, e.g. `"hecate-corpus/roles/devops.md"`,
+not the bare path Phase 2's own example used.
+
+`refresh_corpus_scheduler` moved from `apps/refresh_corpus/src/` to the
+top-level `src/` (now a sibling of `corpus_git_sync`, both service-level
+infrastructure, per `hecate_rag_sup`'s own module doc) — it now calls
+`corpus_repos_config`, a top-level module, and this umbrella's
+dependency direction runs from the top app into the sub-apps, never the
+reverse. Same reasoning that already placed `corpus_git_sync` there in
+Phase 3.
+
+**Deployment:** `docker-compose.hecate-rag.yml`'s old `/corpus:ro`
+mount (a host-side pre-cloned checkout) is gone, replaced by a
+read-only mount of the new JSON file. The real config,
+`beam03.lab/hecate-rag-corpus-repos.json`, names `hecate-corpus` at its
+actual HTTPS URL (`https://github.com/hecate-social/hecate-corpus.git`
+— HTTPS specifically: the NIF has no SSH transport or credentials
+callback, and this repo is public, so HTTPS needs neither).
+
+**Status: implemented and tested.** New:
+`corpus_repos_config_reads_multiple_repos`,
+`corpus_git_sync_clones_then_fast_forwards` (renamed from
+`corpus_git_sync_fast_forwards`, now proves the clone-from-nothing path
+too), `refresh_scheduler_namespaces_by_repo_to_avoid_collisions` (two
+repos, same relative filename, proves no collision).
+`refresh_scheduler_detects_and_refreshes_change` updated to the
+config-driven interface. One real bug caught by these, not by
+compilation or lint: `corpus_repos_config`'s `path` is a binary (the
+Rust side needs it as one), but `filelib:wildcard/1` and this module's
+own `relative_path/2` (list `++`) both require a list — `filelib:is_dir/1`
+happens to accept either, which is why the mismatch reached
+`filelib:wildcard` before surfacing, not earlier. Converted once at
+`scan_repo/1`, the actual entry point, rather than at every downstream
+call site.
+
+**Files:** `src/corpus_repos_config.erl` (new), `src/corpus_git_sync.erl`
+(rewritten: multi-repo, calls `clone_or_sync/3`), `src/refresh_corpus_scheduler.erl`
+(moved from `apps/refresh_corpus/src/`, rewritten: multi-repo + namespacing),
+`apps/refresh_corpus/src/refresh_corpus_sup.erl` (child removed),
+`src/hecate_rag_sup.erl` (child added), `native/hecate_rag_corpus_sync_nif/src/lib.rs`
+(`clone_or_sync` replacing `sync`), `src/hecate_rag_corpus_sync_nif.erl`
+(loader updated to match), `test/rag_test_helpers.erl` (new shared
+`write_repos_config/2`), `macula-demo/infrastructure/scripts/docker-compose.hecate-rag.yml`
+(mount swapped), `macula-demo/infrastructure/beam03.lab/hecate-rag-corpus-repos.json`
+(new, the real production config), `macula-demo/infrastructure/beam03.lab/reconcile.manifest`
+(comment updated).
+
 ## Success criteria
 
 - [x] Seeding `roles/` produces a `get_source_content`-readable verbatim
@@ -212,17 +285,22 @@ end to end.
 - [x] Editing a role file and letting the refresh loop run (no manual
       curl) updates the stored verbatim content within one poll interval —
       proven via `refresh_scheduler_detects_and_refreshes_change` against a
-      fixture directory. Real end-to-end proof on beam03 needs the
-      `hecate-corpus-sync` systemd units enrolled (see Phase 3).
+      fixture directory. Real end-to-end proof on beam03 needs the release
+      actually deployed (see "Remaining" below) — no manual enrollment
+      step needed, unlike the systemd-timer design Phase 4 superseded.
 - [x] `PLAN_RAG_MESH.md` Part A stays tracked there; Part B Phase 4 stays
       unduplicated — this plan is its local prerequisite, not a replacement.
+- [x] A second configured repo doesn't collide with the first even if
+      they share a file name — proven via
+      `refresh_scheduler_namespaces_by_repo_to_avoid_collisions`.
 
 ## Remaining before this is live on beam03
 
-- [ ] Enroll `hecate-corpus-sync.{service,timer}` on beam03 (one-time,
-      touches the box directly — see Phase 3).
-- [ ] Push this repo's changes, let `hecate-reconcile.timer` deploy the
-      new `hecate_rag` release carrying Phases 1-3.
+- [ ] Push `hecate-rag` and `macula-demo`; `hecate-reconcile.timer` pulls
+      the compose/mount change and `watchtower` deploys the new release
+      carrying Phases 1-4 — no manual enrollment step (Phase 4 replaced
+      the design that needed one).
 - [ ] `PLAN_RAG_MESH.md` A1/A2 before attempting one real whole-corpus
       reseed (directory-by-directory seeding remains the interim path
-      until then).
+      until then) — orthogonal to Phase 4's own clone, which walks the
+      whole configured repo by design, not a caller-chosen sub-directory.

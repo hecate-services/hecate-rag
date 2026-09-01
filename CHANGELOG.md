@@ -15,35 +15,56 @@ Versioning: [SemVer](https://semver.org/).
   (`apps/query_sources/src/get_document_verbatim/`). `get_source_by_id`
   (the existing mesh-exposed lookup) returns only metadata, never
   `raw_bytes` — this is the first way to get exact content over the
-  mesh rather than a RAG-reranked approximation of it.
+  mesh rather than a RAG-reranked approximation of it. Path is
+  `"<repo-id>/<relative-path>"` (e.g. `"hecate-corpus/roles/devops.md"`)
+  — see the `corpus_git_sync`/`corpus_repos_config` entry below for why.
 - `maybe_seed_corpus.erl` now calls `rag_store:upsert_source/1` per
   file (previously only `put_chunk`), bringing the bulk directory-seed
   path to parity with the per-document `ingest_document`/`upload_knowledge`
   paths — bulk-seeded files are exact-fetchable via
   `get_document_verbatim`, not chunks-only.
-- `refresh_corpus_scheduler` (new gen_server, `apps/refresh_corpus/`):
-  ticks every 2 minutes, hashes every file under the corpus root, and
-  for anything `detect_corpus_change` reports changed, records the
-  request via `schedule_reembed` and immediately refreshes it
-  (`upsert_source` with current bytes, then `maybe_embed_document:embed`)
-  — closes the loop those two capabilities left open since their own
-  introduction (`schedule_reembed` recorded requests but nothing
-  consumed them).
+- `refresh_corpus_scheduler` (new gen_server, `src/`): ticks every 2
+  minutes, reads `corpus_repos_config` for the configured repo list,
+  and for every file under each repo's path whose hash
+  `detect_corpus_change` reports changed, records the request via
+  `schedule_reembed` and immediately refreshes it (`upsert_source` with
+  current bytes, then `maybe_embed_document:embed`) — closes the loop
+  those two capabilities left open since their own introduction
+  (`schedule_reembed` recorded requests but nothing consumed them).
+  `document_id`/`source_path` are namespaced `<repo-id>/<relative-path>`
+  so two configured repos sharing a same-named file don't collide in
+  `rag_store`, which has no repo-scoping of its own.
+- `corpus_repos_config` (new module, `src/`): reads a JSON file (app
+  env `hecate_rag.corpus_repos_config`, default
+  `/etc/hecate-rag/corpus-repos.json`) naming which git repos to track
+  — `{"repos": [{"id", "url", "branch"}, ...]}` — and derives each
+  one's local clone path (`<data_dir>/corpus/<id>/`, never a config
+  field, so it can't be misconfigured onto a colliding path). Re-read
+  from disk on every poll tick by both `corpus_git_sync` and
+  `refresh_corpus_scheduler`, not cached, so editing the file takes
+  effect on their very next tick with no restart.
 - `corpus_git_sync` (new gen_server) + `hecate_rag_corpus_sync_nif`
   (new embedded Rust NIF, `native/hecate_rag_corpus_sync_nif/`, via
-  `rustler` + `git2` with vendored libgit2): fetches `origin` for the
-  corpus checkout's current branch and fast-forwards it every 2
-  minutes, entirely without an OS `git` binary at runtime. `--ff-only`
-  in spirit — a diverged history is reported and left untouched, never
-  merged. Replaces an external bash-script-on-a-systemd-timer design
-  that was drafted but never deployed. `gitoxide`/`gix` was evaluated
-  and rejected: no porcelain-level pull, only low-level pieces to
-  assemble by hand.
+  `rustler` + `git2` with vendored libgit2): for every repo in
+  `corpus_repos_config`, clones it if its local path doesn't exist yet
+  (`clone_or_sync/3`), otherwise fetches `origin` for the checkout's
+  current branch and fast-forwards it — every 2 minutes, entirely
+  without an OS `git` binary at runtime, on the host or in the
+  container. `--ff-only` in spirit — a diverged history is reported
+  and left untouched, never merged. Replaces an external
+  bash-script-on-a-systemd-timer design that assumed a single
+  already-cloned checkout and was drafted but never deployed.
+  `gitoxide`/`gix` was evaluated and rejected: no porcelain-level pull,
+  only low-level pieces to assemble by hand.
 - `scripts/build-corpus-sync-nif.sh` builds the new NIF; the
   `Containerfile`'s builder stage now runs it (previously only built
   NIFs for `_checkouts/`-overridden dependencies, never this repo's
   own `native/`) — verified against a real Alpine/musl container build,
   not just the local dev machine.
+- `docker-compose.hecate-rag.yml` (in `macula-demo/infrastructure`):
+  the old host-side pre-cloned `/corpus:ro` mount is replaced by a
+  read-only mount of the new `corpus-repos.json`; `hecate-rag` now
+  owns the clone itself.
 
 ### Changed
 
@@ -54,6 +75,35 @@ Versioning: [SemVer](https://semver.org/).
   `hecate_rag.app.src` and `hecate_rag_service:info/0` already reading
   `"0.1.7"` (missed in that release) — corrected alongside this
   release's own bump so the built release tarball's name matches.
+
+### Fixed
+
+- Two real bugs found live on beam03 after this version's own first
+  deploy, both blocking `corpus_git_sync`/`refresh_corpus_scheduler`
+  from ever doing useful work against the real corpus:
+  - `hecate_rag_corpus_sync_nif` failed every tick with `"repository
+    path '/corpus' is not owned by current user"` — libgit2's
+    ownership-validation check (the CVE-2022-24765 mitigation) refusing
+    a bind-mounted host directory whose owner UID doesn't match the
+    container's runtime UID, exactly the situation for every path this
+    NIF touches. Fixed by adding each path to `safe.directory` in the
+    global git config (`Config::open_default()?.open_global()?.set_multivar(...)`,
+    idempotent per path via a `Mutex<HashSet>` guard) rather than
+    disabling the check process-wide — reproduced the exact failure and
+    verified the fix in an isolated container before shipping it, not
+    just the symptom. `git2::opts::set_verify_owner_validation(false)`
+    also works and was tried first, but trusts every path this NIF will
+    ever touch instead of only the ones it's actually configured for.
+  - `refresh_corpus_scheduler` crash-looped indefinitely (every tick)
+    with `{timeout, {gen_server, call, [rag_store, {get_watermark, ...}]}}`:
+    `rag_store`'s default 5000ms `gen_server:call/2` timeout is too
+    short once its single gen_server is legitimately busy running
+    barrel's own record-mode embedding (a real mesh round-trip to the
+    configured embedder, inside the same `handle_call` that stores the
+    chunk) under a real write burst — an unrelated queued call, even a
+    cheap read, times out waiting its turn, not because anything is
+    actually stuck. Every `rag_store` public function now passes an
+    explicit `?CALL_TIMEOUT` (60000ms) instead of the implicit default.
 
 ## [0.1.7] - 2026-09-01
 

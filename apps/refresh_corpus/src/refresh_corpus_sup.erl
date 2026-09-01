@@ -7,11 +7,12 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
+%% refresh_corpus_scheduler moved to the top-level hecate_rag_sup --
+%% see that module's own doc comment for why (it calls the top-level
+%% corpus_repos_config module, and this umbrella's dependency
+%% direction runs from the top app into the sub-apps, not back).
 init([]) ->
     {ok, {
         #{strategy => one_for_one, intensity => 10, period => 10},
-        [
-            #{id => refresh_corpus_scheduler,
-              start => {refresh_corpus_scheduler, start_link, []}}
-        ]
+        []
     }}.

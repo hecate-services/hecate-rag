@@ -1,24 +1,66 @@
 //! hecate_rag_corpus_sync_nif
 //!
-//! Rustler NIF backing the corpus git-sync gen_server. Replaces the
-//! bash-script-on-a-systemd-timer design: fetch `origin` for the
-//! checkout's current branch and fast-forward it, entirely via
-//! vendored libgit2 (statically linked at build time) -- no `git`
-//! binary needed on the host or in the container at runtime.
+//! Rustler NIF backing the corpus git-sync gen_server. Given a repo's
+//! URL and a local path, clones it if the path isn't a checkout yet;
+//! otherwise fetches `origin` for the checkout's current branch and
+//! fast-forwards it. Entirely via vendored libgit2 (statically linked
+//! at build time) -- no `git` binary needed on the host or in the
+//! container at runtime. Replaces an earlier bash-script-on-a-
+//! systemd-timer design that only handled the fetch/fast-forward half
+//! and assumed the checkout already existed.
 //!
 //! Deliberately `--ff-only` in spirit: a real merge is never
 //! attempted. A diverged history is reported as `not_fast_forward`
-//! and left untouched, the same safety property the bash script's
-//! own `git pull --ff-only` had.
+//! and left untouched, the same safety property `git pull --ff-only`
+//! has.
 //!
 //! HTTPS only (mirrors this fleet's actual clone convention -- see
 //! `macula-demo/infrastructure/gitops/README.md`'s enrollment step).
 //! No SSH transport, no credentials callback: a private repo needing
 //! auth is out of scope until something here actually needs one.
+//!
+//! Trusts each path via `safe.directory` (git's own CVE-2022-24765
+//! mitigation config, added to libgit2 too) rather than disabling
+//! libgit2's ownership check globally: every path this NIF touches is
+//! a bind-mounted host directory owned by the host's own user, not the
+//! container's runtime UID, so `Repository::open` refuses it by
+//! default. Verified live (and reproduced in an isolated container to
+//! confirm the fix, not just the symptom): without this, every call
+//! failed with "repository path '/corpus' is not owned by current
+//! user" -- a container reading its own operator's bind mount, not an
+//! untrusted repo. `safe.directory` scopes trust to the exact
+//! configured paths rather than turning the check off process-wide
+//! (`git2::opts::set_verify_owner_validation(false)` was tried first
+//! and also works, but disables the CVE-2022-24765 protection for
+//! every path this NIF will ever touch, not just the ones it's
+//! actually configured for -- narrower is better with no extra cost
+//! here). Idempotent per path (a `Mutex<HashSet>` guard, not a
+//! `set_multivar` call every tick forever): `safe.directory` is a
+//! multivar with no natural "already present" semantics of its own,
+//! and this NIF's own caller re-syncs the same handful of paths every
+//! 2 minutes for the life of the process.
 
 use git2::{AnnotatedCommit, FetchOptions, Reference, Repository};
+use std::collections::HashSet;
+use std::path::Path;
+use std::sync::Mutex;
+
+static TRUSTED_PATHS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+fn ensure_path_trusted(path: &str) -> Result<(), SyncError> {
+    let mut guard = TRUSTED_PATHS.lock().unwrap();
+    let seen = guard.get_or_insert_with(HashSet::new);
+    if seen.contains(path) {
+        return Ok(());
+    }
+    let mut cfg = git2::Config::open_default()?.open_global()?;
+    cfg.set_multivar("safe.directory", "^$", path)?;
+    seen.insert(path.to_string());
+    Ok(())
+}
 
 pub enum Status {
+    Cloned,
     UpToDate,
     FastForwarded { from: String, to: String },
 }
@@ -34,7 +76,32 @@ impl From<git2::Error> for SyncError {
     }
 }
 
-pub fn sync_inner(path: &str) -> Result<Status, SyncError> {
+/// Ensures `path` is a checkout of `url` and current with it: clones if
+/// `path` has no `.git` yet (checking out `branch` if non-empty, else
+/// the remote's own default branch), otherwise fetches+fast-forwards
+/// whatever branch is already checked out (existing checkouts are
+/// never switched to a different branch by a config change -- that's
+/// a rarer, deliberate operator action, not something to do silently
+/// mid-poll-loop).
+pub fn clone_or_sync(url: &str, path: &str, branch: &str) -> Result<Status, SyncError> {
+    ensure_path_trusted(path)?;
+    if Path::new(path).join(".git").is_dir() {
+        sync_inner(path)
+    } else {
+        clone_inner(url, path, branch)
+    }
+}
+
+fn clone_inner(url: &str, path: &str, branch: &str) -> Result<Status, SyncError> {
+    let mut builder = git2::build::RepoBuilder::new();
+    if !branch.is_empty() {
+        builder.branch(branch);
+    }
+    builder.clone(url, Path::new(path))?;
+    Ok(Status::Cloned)
+}
+
+fn sync_inner(path: &str) -> Result<Status, SyncError> {
     let repo = Repository::open(path)?;
     let branch_name = current_branch_name(&repo)?;
 
@@ -100,13 +167,14 @@ fn fast_forward(
 // loaded for real.
 #[cfg(not(test))]
 mod nif {
-    use super::{sync_inner, Status, SyncError};
+    use super::{Status, SyncError};
     use rustler::{Encoder, Env, NifResult, Term};
 
     mod atoms {
         rustler::atoms! {
             ok,
             error,
+            cloned,
             up_to_date,
             fast_forwarded,
             not_fast_forward,
@@ -115,8 +183,9 @@ mod nif {
     }
 
     #[rustler::nif(schedule = "DirtyIo")]
-    fn sync<'a>(env: Env<'a>, path: String) -> NifResult<Term<'a>> {
-        Ok(match sync_inner(&path) {
+    fn clone_or_sync<'a>(env: Env<'a>, url: String, path: String, branch: String) -> NifResult<Term<'a>> {
+        Ok(match super::clone_or_sync(&url, &path, &branch) {
+            Ok(Status::Cloned) => (atoms::ok(), atoms::cloned()).encode(env),
             Ok(Status::UpToDate) => (atoms::ok(), atoms::up_to_date()).encode(env),
             Ok(Status::FastForwarded { from, to }) => {
                 (atoms::ok(), (atoms::fast_forwarded(), from, to)).encode(env)
@@ -187,11 +256,8 @@ mod tests {
 
     /// Sets up a bare "remote" repo plus a working "origin-side" checkout
     /// that pushes into it (bare repos have no working tree of their own,
-    /// so commits have to be made in a separate clone and pushed). Returns
-    /// (remote_bare_dir, origin_workdir, local_clone_dir) -- the NIF under
-    /// test operates on local_clone_dir, matching what a real corpus
-    /// checkout on a beam host is.
-    fn setup() -> (TempDir, TempDir, TempDir) {
+    /// so commits have to be made in a separate clone and pushed).
+    fn setup_remote_with_content() -> (TempDir, TempDir) {
         let remote_dir = TempDir::new("remote-bare");
         Repository::init_bare(remote_dir.path()).unwrap();
 
@@ -204,6 +270,17 @@ mod tests {
                 .unwrap();
             remote.push(&["refs/heads/master:refs/heads/master"], None).unwrap();
         }
+
+        (remote_dir, origin_dir)
+    }
+
+    /// Same as `setup_remote_with_content` plus an already-cloned local
+    /// checkout -- what the three tests below exercise `clone_or_sync`'s
+    /// fetch+fast-forward branch against (the NIF under test operates on
+    /// `local_clone_dir`, matching what a real corpus checkout on a beam
+    /// host already is by the time this ever runs against it).
+    fn setup() -> (TempDir, TempDir, TempDir) {
+        let (remote_dir, origin_dir) = setup_remote_with_content();
 
         let local_dir = TempDir::new("local-clone");
         fs::remove_dir(local_dir.path()).unwrap(); // clone_into needs to create it itself
@@ -220,23 +297,42 @@ mod tests {
     }
 
     #[test]
+    fn clones_when_local_path_does_not_exist() {
+        let (remote, _origin) = setup_remote_with_content();
+        let local_dir = TempDir::new("fresh-clone-target");
+        fs::remove_dir(local_dir.path()).unwrap(); // clone_or_sync must create it itself
+
+        let url = remote.path().to_str().unwrap().to_string();
+        let path = local_dir.path().to_str().unwrap().to_string();
+        match clone_or_sync(&url, &path, "") {
+            Ok(Status::Cloned) => {}
+            _ => panic!("expected a fresh clone"),
+        }
+
+        let content = fs::read_to_string(local_dir.path().join("corpus.md")).unwrap();
+        assert_eq!(content, "# v1\n");
+    }
+
+    #[test]
     fn up_to_date_when_nothing_changed() {
-        let (_remote, _origin, local) = setup();
+        let (remote, _origin, local) = setup();
+        let url = remote.path().to_str().unwrap().to_string();
         let path = local.path().to_str().unwrap().to_string();
-        match sync_inner(&path) {
+        match clone_or_sync(&url, &path, "") {
             Ok(Status::UpToDate) => {}
-            Ok(Status::FastForwarded { .. }) => panic!("expected UpToDate, got FastForwarded"),
+            Ok(_) => panic!("expected UpToDate"),
             Err(_) => panic!("expected UpToDate, got an error"),
         }
     }
 
     #[test]
     fn fast_forwards_and_updates_the_working_tree() {
-        let (_remote, origin, local) = setup();
+        let (remote, origin, local) = setup();
         push_new_commit(&origin, "# v2\n");
 
+        let url = remote.path().to_str().unwrap().to_string();
         let path = local.path().to_str().unwrap().to_string();
-        match sync_inner(&path) {
+        match clone_or_sync(&url, &path, "") {
             Ok(Status::FastForwarded { from, to }) => assert_ne!(from, to),
             _ => panic!("expected a fast-forward"),
         }
@@ -245,7 +341,7 @@ mod tests {
         assert_eq!(content, "# v2\n");
 
         // Idempotent: a second sync with nothing new is up-to-date, not an error.
-        match sync_inner(&path) {
+        match clone_or_sync(&url, &path, "") {
             Ok(Status::UpToDate) => {}
             _ => panic!("expected UpToDate on the second sync"),
         }
@@ -253,7 +349,7 @@ mod tests {
 
     #[test]
     fn diverged_history_is_left_untouched() {
-        let (_remote, origin, local) = setup();
+        let (remote, origin, local) = setup();
 
         // Diverge: a local commit never pushed anywhere...
         let local_repo = Repository::open(local.path()).unwrap();
@@ -262,8 +358,9 @@ mod tests {
         // ...while origin moves forward independently.
         push_new_commit(&origin, "# v2-from-origin\n");
 
+        let url = remote.path().to_str().unwrap().to_string();
         let path = local.path().to_str().unwrap().to_string();
-        match sync_inner(&path) {
+        match clone_or_sync(&url, &path, "") {
             Err(SyncError::NotFastForward) => {}
             _ => panic!("expected NotFastForward on diverged history"),
         }

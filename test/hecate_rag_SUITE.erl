@@ -6,11 +6,11 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([service_info/1, capabilities_advertised/1, identity_spec_shape/1, mesh_rpc_dispatch_unknown/1,
-         corpus_git_sync_fast_forwards/1]).
+         corpus_repos_config_reads_multiple_repos/1, corpus_git_sync_clones_then_fast_forwards/1]).
 
 all() ->
     [service_info, capabilities_advertised, identity_spec_shape, mesh_rpc_dispatch_unknown,
-     corpus_git_sync_fast_forwards].
+     corpus_repos_config_reads_multiple_repos, corpus_git_sync_clones_then_fast_forwards].
 
 init_per_suite(Config) ->
     ok = rag_test_helpers:start_hecate_rag(),
@@ -41,35 +41,70 @@ mesh_rpc_dispatch_unknown(_Config) ->
     ?assertMatch({error, {unknown_method, _}},
                  hecate_rag_mesh_rpc:dispatch(<<"hecate-rag.no_such_method">>, #{})).
 
+%% Pure unit test of the shared config module -- no git, no NIF.
+corpus_repos_config_reads_multiple_repos(Config) ->
+    TmpDir = ?config(priv_dir, Config),
+    ConfigPath = filename:join(TmpDir, "multi-repos.json"),
+    DataDir = filename:join(TmpDir, "multi-data"),
+    ok = rag_test_helpers:write_repos_config(ConfigPath, [
+        #{id => <<"repo-a">>, url => <<"https://example.com/a.git">>, branch => <<"main">>},
+        #{id => <<"repo-b">>, url => <<"https://example.com/b.git">>}
+    ]),
+    ok = application:set_env(hecate_rag, corpus_repos_config, ConfigPath),
+    ok = application:set_env(hecate_rag, data_dir, DataDir),
+
+    {ok, [RepoA, RepoB]} = corpus_repos_config:read(),
+    ?assertEqual(<<"repo-a">>, maps:get(id, RepoA)),
+    ?assertEqual(<<"https://example.com/a.git">>, maps:get(url, RepoA)),
+    ?assertEqual(<<"main">>, maps:get(branch, RepoA)),
+    ?assertEqual(iolist_to_binary(filename:join([DataDir, "corpus", "repo-a"])), maps:get(path, RepoA)),
+    ?assertEqual(<<"repo-b">>, maps:get(id, RepoB)),
+    ?assertEqual(<<>>, maps:get(branch, RepoB)),
+
+    ok = application:unset_env(hecate_rag, corpus_repos_config),
+    ok = application:unset_env(hecate_rag, data_dir).
+
 %% End-to-end proof that the embedded Rust NIF actually loads and works
 %% inside a real running hecate_rag application, not just in the crate's
 %% own `cargo test' (which deliberately excludes the rustler wrapper --
-%% see that crate's own lib.rs). Fixture repos are built with the real
-%% `git' CLI here -- fine for test setup; the property being proved is
-%% that PRODUCTION sync (corpus_git_sync -> hecate_rag_corpus_sync_nif)
-%% needs no `git` binary at runtime, not that git tooling can never
-%% exist anywhere in the test environment.
-corpus_git_sync_fast_forwards(Config) ->
+%% see that crate's own lib.rs), AND that corpus_git_sync's own
+%% config-driven, clone-if-missing, multi-repo behavior works end to
+%% end. Fixture repos are built with the real `git' CLI here -- fine
+%% for test setup; the property being proved is that PRODUCTION sync
+%% (corpus_git_sync -> hecate_rag_corpus_sync_nif) needs no `git`
+%% binary at runtime, not that git tooling can never exist anywhere in
+%% the test environment.
+corpus_git_sync_clones_then_fast_forwards(Config) ->
     TmpDir = ?config(priv_dir, Config),
     RemoteDir = filename:join(TmpDir, "remote.git"),
-    LocalDir = filename:join(TmpDir, "local-checkout"),
+    OriginDir = filename:join(TmpDir, "origin-workdir"),
+    DataDir = filename:join(TmpDir, "data"),
+    ConfigPath = filename:join(TmpDir, "corpus-repos.json"),
+    RepoId = <<"test-repo">>,
+    LocalDir = filename:join([DataDir, "corpus", "test-repo"]),
+
     ok = git_init_bare(RemoteDir),
-    ok = git_clone(RemoteDir, LocalDir),
-    ok = git_commit_and_push(LocalDir, "corpus.md", "# v1\n", "initial"),
+    ok = git_clone(RemoteDir, OriginDir),
+    ok = git_commit_and_push(OriginDir, "corpus.md", "# v1\n", "initial"),
+    ok = rag_test_helpers:write_repos_config(ConfigPath, [#{id => RepoId, url => list_to_binary(RemoteDir)}]),
+    ok = application:set_env(hecate_rag, corpus_repos_config, ConfigPath),
+    ok = application:set_env(hecate_rag, data_dir, DataDir),
 
-    ok = application:set_env(hecate_rag, corpus_root, LocalDir),
+    %% Local path doesn't exist yet -- clones itself, no manual pre-clone step.
+    ?assertEqual(#{RepoId => {ok, cloned}}, corpus_git_sync:sync_now()),
+    {ok, V1Content} = file:read_file(filename:join(LocalDir, "corpus.md")),
+    ?assertEqual(<<"# v1\n">>, V1Content),
 
-    ?assertEqual({ok, up_to_date}, corpus_git_sync:sync_now()),
+    ?assertEqual(#{RepoId => {ok, up_to_date}}, corpus_git_sync:sync_now()),
 
-    OtherClone = filename:join(TmpDir, "other-clone"),
-    ok = git_clone(RemoteDir, OtherClone),
-    ok = git_commit_and_push(OtherClone, "corpus.md", "# v2\n", "update"),
+    ok = git_commit_and_push(OriginDir, "corpus.md", "# v2\n", "update"),
 
-    ?assertMatch({ok, {fast_forwarded, _, _}}, corpus_git_sync:sync_now()),
-    {ok, Content} = file:read_file(filename:join(LocalDir, "corpus.md")),
-    ?assertEqual(<<"# v2\n">>, Content),
+    ?assertMatch(#{RepoId := {ok, {fast_forwarded, _, _}}}, corpus_git_sync:sync_now()),
+    {ok, V2Content} = file:read_file(filename:join(LocalDir, "corpus.md")),
+    ?assertEqual(<<"# v2\n">>, V2Content),
 
-    ok = application:unset_env(hecate_rag, corpus_root).
+    ok = application:unset_env(hecate_rag, corpus_repos_config),
+    ok = application:unset_env(hecate_rag, data_dir).
 
 %%% git fixture helpers -- shell out to the real git CLI, test-only.
 
