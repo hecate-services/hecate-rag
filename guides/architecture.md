@@ -108,7 +108,7 @@ classify_topics(document_id, mode=document|per_chunk)
 
 Topics are stored as `<<"topics">>` metadata on each chunk, indexed by
 barrel's `metadata_fields`. `search_chunks_semantic` accepts an optional
-`<<"topics">` filter: over-fetches 3x top_k, post-filters by topic
+`<<"topics">>` filter: over-fetches 3x top_k, post-filters by topic
 intersection, returns top_k filtered results.
 
 Configuration (`topic_classifier` under `hecate_rag` app env):

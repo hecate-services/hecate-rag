@@ -5,6 +5,20 @@ Versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-09-01
+
+### Changed
+- Retired `mcp/` dev-loop tool (TypeScript MCP stdio server bridging
+  Claude to hecate-rag via local HTTP). Superseded by the mesh API —
+  agents with mesh access call `hecate-rag.upload_knowledge`,
+  `add_knowledge`, `search_chunks_semantic`, etc. directly via
+  `macula:call`, no HTTP bridge needed.
+- Updated README: accurate capability count (15), fixed deps list
+  (barrel not esqlite, no hecate-vector/hecate-embed as separate deps),
+  fixed deploy section (watchtower/docker, not hecate-gitops), updated
+  umbrella layout with all current desks.
+- Updated `guides/architecture.md`: fixed topic filter typo.
+
 ## [0.1.5] - 2026-09-01
 
 ### Added

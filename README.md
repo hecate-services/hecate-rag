@@ -3,11 +3,11 @@
 Retrieval-augmented generation as a **realm-bound mesh service**.
 
 `hecate-rag` runs as an always-on container daemon on Hecate
-infrastructure nodes (BEAM cluster, dedicated relay boxes). Users and
-plugins on user laptops reach it via the Macula mesh — they never run
-their own RAG. The service holds the index, answers queries, and
-optionally federates against peer `hecate-rag` instances on other
-nodes via [`macula-rag`](https://github.com/macula-io/macula-rag).
+infrastructure nodes (BEAM cluster, dedicated relay boxes). Agents and
+services reach it via the Macula mesh — they never run their own RAG.
+The service holds the index, answers queries, and optionally federates
+against peer `hecate-rag` instances on other nodes via
+[`macula-rag`](https://github.com/macula-io/macula-rag).
 
 ## Layer position
 
@@ -52,27 +52,27 @@ Advertised onto the mesh bloom-channel and discoverable by name:
 
 See [guides/architecture.md](guides/architecture.md) for the full
 design, including the embedding pipeline, the gen_server
-non-blocking fix, and the topic classification layer.
+non-blocking fix, the two ingestion entry points, topic classification,
+and federation wiring.
 
 ## Umbrella layout
 
 | App | Department | Purpose |
 |-----|-----------|---------|
-| `rag` | shared | root + notation, `rag_store`, `rag_embedder`, `rag_chunk_embedder` |
-| `embed_corpus` | CMD | upload, add, ingest, embed, classify, prune |
-| `refresh_corpus` | CMD | detect changes, schedule re-embeds |
-| `serve_retrieval` | CMD | answer queries, rerank |
-| `query_chunks` | QRY | chunk lookups + semantic search |
-| `query_sources` | QRY | source metadata lookups |
+| `rag` | shared | `rag_store`, `rag_embedder`, `rag_chunk_embedder`, `rag_embed_hecate_embedder` |
+| `embed_corpus` | CMD | upload_knowledge, add_knowledge, ingest_document, embed_document, classify_topics, seed_corpus, prune_chunks |
+| `refresh_corpus` | CMD | detect_corpus_change, schedule_reembed |
+| `serve_retrieval` | CMD | answer_query, rerank_results |
+| `query_chunks` | QRY | get_chunk_by_id, list_chunks_by_source, search_chunks_semantic |
+| `query_sources` | QRY | get_source_by_id, list_sources_page |
 
 Vertical slicing all the way down — each desk co-locates its
-command, handler, and API stub. Regenerate slice stubs with
-`scripts/scaffold-slices.py`.
+command, handler, and API stub.
 
 ## Deps
 
 - [`hecate-om`](https://github.com/hecate-services/hecate-om) — service substrate (`hecate_om_service` behaviour, identity, capabilities, health)
-- [`barrel`](https://hex.pm/packages/barrel) — document + vector storage with HNSW ANN index
+- [`barrel`](https://hex.pm/packages/barrel) — document + vector storage with HNSW ANN index (record mode)
 - [`hecate-embedder`](https://github.com/hecate-services/hecate-embedder) — sovereign sentence-embedding capability on the mesh (NIF, `multilingual-e5-small`, 384-dim)
 - [`macula-rag`](https://github.com/macula-io/macula-rag) — federated retrieval protocol
 - `reckon_db` + `evoq` + `reckon_evoq` — event sourcing (transitive via hecate_om)
@@ -106,8 +106,8 @@ See `quadlet/hecate-rag.container` for the canonical unit.
 ## Status
 
 **Working, not scaffold.** All 15 mesh capabilities are real. The core
-pipeline — upload_knowledge (raw file → chunk → embed → store) and
-add_knowledge (text snippet → chunk → embed → store) — writes through
+pipeline — `upload_knowledge` (raw file → chunk → embed → store) and
+`add_knowledge` (text snippet → chunk → embed → store) — writes through
 to a real [`barrel`](https://hex.pm/packages/barrel) record-mode
 database with HNSW vector indexing. Embedding runs on
 [`hecate-embedder`](https://github.com/hecate-services/hecate-embedder)
@@ -119,14 +119,10 @@ in the caller's process — never inside `rag_store`'s gen_server.
 optional topic filtering. `rerank_results` blends semantic and lexical
 scores. `detect_corpus_change` compares against persisted watermarks.
 
-Verified live end-to-end: upload → search (retrieves by meaning, not
-keyword match), add_knowledge → search, topic classification → topic-
-filtered search, surviving container restart (vector index persists
-to mounted volume).
-
-Extracted from the prior `hecate-apps/hecate-app-rag/hecate-app-ragd` plugin
-scaffold (2026-05-18); the plugin contract has been swapped for the
-`hecate_om_service` behaviour.
+Verified live end-to-end on beam03: upload → search (retrieves by
+meaning, not keyword match), add_knowledge → search, topic
+classification → topic-filtered search, surviving container restart
+(vector index persists to mounted volume).
 
 ## License
 
