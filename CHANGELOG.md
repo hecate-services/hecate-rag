@@ -3,6 +3,21 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.16] - 2026-09-01
+
+### Fixed
+
+- CI: `lint.yml` had no Rust toolchain, so `macula_cbor_nif` (macula's
+  CBOR wire codec, no Erlang fallback by design) never actually built --
+  masked until now behind a separate, now-fixed bug where `macula_quic`'s
+  own precompiled-NIF download failed first and stopped the build even
+  earlier. With that gone, `rebar3 lint` reached `macula_cbor_nif` and
+  hard-failed on the missing Rust toolchain instead of silently
+  producing a package that would `nif_not_loaded` at runtime.
+  `hecate_om`'s own `lint-and-test.yml` already documents and fixes this
+  exact problem for the same reason; this repo just hadn't adopted it.
+  Added the same `dtolnay/rust-toolchain@stable` step.
+
 ## [0.1.15] - 2026-09-01
 
 ### Fixed

@@ -22,4 +22,15 @@ jobs:
       # exercise first. Same reasoning as hecate-om's/hecate-mail's own
       # lint-and-test.yml.
       - run: apt-get update && apt-get install -y --no-install-recommends cmake build-essential libsnappy-dev liblz4-dev libzstd-dev libbz2-dev
+      # macula_cbor_nif (macula's CBOR wire codec) has no Erlang
+      # fallback by design and always builds from source -- macula's
+      # own precompiled-download path only covers the QUIC NIF. Without
+      # Rust here, `rebar3 lint` used to go green (or, before that,
+      # fail earlier on the QUIC NIF's own now-fixed download gap)
+      # while never actually building macula_cbor_nif, silently masking
+      # a compile that would fail every caller at runtime with
+      # nif_not_loaded. Same fix hecate_om's lint-and-test.yml already
+      # documents and applies for the identical reason.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
       - run: rebar3 lint
