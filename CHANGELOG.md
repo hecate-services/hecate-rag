@@ -3,6 +3,29 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.14] - 2026-09-01
+
+### Fixed
+
+- Bumped `hecate_om` `0.19.0` -> `0.20.0` and removed the temporary
+  diagnostic log from v0.1.13. The v0.1.12 mesh-payload fix resolved
+  the atom/binary KEY hazard but not the whole bug: `hecate_om_wire:
+  field/2,3` still returned the wire-level CBOR VALUE representation
+  unchanged, so every `is_binary/1` guard downstream kept silently
+  failing against a real caller's payload -- a JSON string arrives as
+  `{text, binary()}` (CBOR text string, major type 3), not a bare
+  `binary()`. The v0.1.13 diagnostic confirmed this directly: the real
+  `get_document_verbatim` payload was `#{source_path => {text,
+  <<"...">>}}`. `hecate_om` 0.20.0's `hecate_om_wire:unwrap/1` fixes
+  this at the source; every `hecate_om_wire:field/2,3` call site fixed
+  in v0.1.12 (route/2 clauses, every `*_v1.erl` command's `from_map/1`,
+  `search_chunks_semantic`, `list_chunks_by_source`, `list_sources_page`,
+  `maybe_classify_topics`) gets the fix automatically, no further
+  changes needed on this side. New tests in `wire_field_tolerance_tests.
+  erl` exercise the realistic wire shape (atom keys AND `{text, Bin}`
+  wrapped values, including through `hits :: [map()]`) through this
+  repo's actual call sites, not just `hecate_om`'s own test suite.
+
 ## [0.1.13] - 2026-09-01
 
 ### Changed (temporary diagnostic, to be reverted)

@@ -86,9 +86,7 @@ handle_search_chunks_semantic(P) -> route(<<"hecate-rag.search_chunks_semantic">
 handle_list_chunks_by_source(P)  -> route(<<"hecate-rag.list_chunks_by_source">>, P).
 handle_get_source_by_id(P)       -> route(<<"hecate-rag.get_source_by_id">>, P).
 handle_list_sources_page(P)      -> route(<<"hecate-rag.list_sources_page">>, P).
-handle_get_document_verbatim(P)  ->
-    logger:warning("DIAGNOSTIC get_document_verbatim payload: ~p", [P]),
-    route(<<"hecate-rag.get_document_verbatim">>, P).
+handle_get_document_verbatim(P)  -> route(<<"hecate-rag.get_document_verbatim">>, P).
 handle_detect_corpus_change(P)   -> route(<<"hecate-rag.detect_corpus_change">>, P).
 handle_schedule_reembed(P)       -> route(<<"hecate-rag.schedule_reembed">>, P).
 

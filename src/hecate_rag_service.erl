@@ -11,7 +11,7 @@
 info() ->
     #{
         name        => <<"hecate-rag">>,
-        version     => <<"0.1.13">>,
+        version     => <<"0.1.14">>,
         description => <<"Realm-bound RAG service: retrieval over the configured corpora">>
     }.
 

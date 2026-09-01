@@ -1,11 +1,14 @@
 # Plan: Verbatim retrieval + corpus freshness
 
-**Status:** Deployed on beam03 (v0.1.12). Corpus clone + seeding
+**Status:** Deployed on beam03 (v0.1.14). Corpus clone + seeding
 verified live via `hecate-rag.list_sources_page` returning real
-`hecate-corpus/*` content. `get_document_verbatim` was blocked by
-CHANGELOG `[0.1.12]`'s mesh-payload atom/binary key hazard (Demon 60 in
-`hecate-corpus/skills/antipatterns/erlang.md`), now fixed at the
-source across every affected entry point, not just this one.
+`hecate-corpus/*` content. `get_document_verbatim` was blocked by two
+compounding mesh-payload hazards -- atom/binary KEYS (CHANGELOG
+`[0.1.12]`) and CBOR-wrapped VALUES (CHANGELOG `[0.1.14]`, `hecate_om`
+`[0.20.0]`) -- both documented as Demon 60 in
+`hecate-corpus/skills/antipatterns/erlang.md`, now fixed at the source
+across every affected entry point, not just this one. Not yet
+re-verified live post-v0.1.14 deploy.
 **Created:** 2026-09-01
 **Last Updated:** 2026-09-01
 **Scope:** hecate-rag (this repo)

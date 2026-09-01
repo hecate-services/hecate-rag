@@ -10,11 +10,17 @@
 %%% `detect_corpus_change'/`schedule_reembed' silently returning
 %%% `missing_aggregate_id' even when a real corpus_id was supplied.
 %%%
-%%% Every case here constructs its payload with ATOM keys -- exactly
+%%% Most cases here construct their payload with ATOM keys -- exactly
 %%% the shape macula's decoder actually produces -- proving the fix
 %%% accepts it, not just that it still accepts the binary-keyed shape
 %%% these modules already had coverage for via their own binary-key
-%%% call sites elsewhere.
+%%% call sites elsewhere. A few (marked below) also wrap string VALUES
+%%% in `{text, Bin}' -- the CBOR text-string representation
+%%% `hecate_om_wire:field/2,3' (>= 0.20.0) unwraps -- since the key
+%%% shape alone (fixed first, in hecate_om 0.19.0) turned out not to be
+%%% the whole story: a live diagnostic on 2026-09-01 found the real
+%%% wire payload was `#{source_path => {text, <<"...">>}}', not
+%%% `#{source_path => <<"...">>}' as every test here originally assumed.
 %%%
 %%% Deliberately EUnit, not a Common Test suite: every function tested
 %%% here is a pure map-in/result-out transform with no rag_store or
@@ -98,3 +104,38 @@ rerank_results_from_map_accepts_atom_keys_test() ->
 classify_topics_mode_accepts_atom_keyed_params_test() ->
     ?assertEqual(per_chunk, maybe_classify_topics:mode(#{mode => <<"per_chunk">>})),
     ?assertEqual(document, maybe_classify_topics:mode(#{})).
+
+%%% The realistic wire shape: atom keys AND {text, Bin}-wrapped string
+%%% values, exactly as the 2026-09-01 diagnostic found live. These
+%%% exercise hecate_om_wire:field/2,3's own unwrap (>= 0.20.0) through
+%%% this repo's actual call sites, not just hecate_om's own test suite.
+
+ingest_document_from_map_accepts_the_real_wire_shape_test() ->
+    {ok, Cmd} = ingest_document_v1:from_map(
+                  #{document_id => {text, <<"doc-1">>},
+                    source_path => {text, <<"a.md">>}}),
+    ?assertEqual(<<"doc-1">>, ingest_document_v1:get_document_id(Cmd)),
+    ?assertEqual(<<"a.md">>, ingest_document_v1:get_source_path(Cmd)).
+
+detect_corpus_change_from_map_accepts_the_real_wire_shape_test() ->
+    Result = detect_corpus_change_v1:from_map(
+               #{corpus_id => {text, <<"real-id">>},
+                 source_path => {text, <<"a.md">>},
+                 diff_hash => {text, <<"h1">>}}),
+    ?assertNotEqual({error, missing_aggregate_id}, Result),
+    {ok, Cmd} = Result,
+    ?assertEqual(<<"real-id">>, detect_corpus_change_v1:get_corpus_id(Cmd)),
+    ?assertEqual(<<"a.md">>, detect_corpus_change_v1:get_source_path(Cmd)).
+
+rerank_results_from_map_accepts_the_real_wire_shape_including_topics_list_test() ->
+    {ok, Cmd} = rerank_results_v1:from_map(
+                  #{query_id => {text, <<"q1">>},
+                    query_text => {text, <<"weather">>},
+                    hits => [#{content => {text, <<"first">>}, score => 0.9}]}),
+    ?assertEqual(<<"q1">>, rerank_results_v1:get_query_id(Cmd)),
+    ?assertEqual(<<"weather">>, rerank_results_v1:get_query_text(Cmd)),
+    ?assertEqual([#{content => <<"first">>, score => 0.9}],
+                 rerank_results_v1:get_hits(Cmd)).
+
+classify_topics_mode_accepts_a_cbor_text_tuple_value_test() ->
+    ?assertEqual(per_chunk, maybe_classify_topics:mode(#{mode => {text, <<"per_chunk">>}})).
