@@ -11,7 +11,7 @@
 info() ->
     #{
         name        => <<"hecate-rag">>,
-        version     => <<"0.1.6">>,
+        version     => <<"0.1.7">>,
         description => <<"Realm-bound RAG service: retrieval over the configured corpora">>
     }.
 
@@ -29,25 +29,35 @@ stop(_State) ->
 health() ->
     ok.
 
-%% @doc Advertised onto the mesh bloom-channel by hecate_om_capabilities.
+%% @doc Advertised onto the mesh bloom-channel by hecate_om_capabilities,
+%% and — via each entry's `handler' key — actually callable through it
+%% too (`hecate_om_simple_handler' bridges to `hecate_rag_mesh_rpc''s own
+%% one-arity handler functions, so their `route/2' dispatch logic is
+%% unchanged). No capability here sets `auth': all 15 stay open. See
+%% `plans/PLAN_UCAN_GATED_CAPABILITIES.md' for `prune_chunks' and
+%% `schedule_reembed' as gating candidates, not yet decided.
 capabilities() ->
     [
-        #{name => <<"hecate-rag.ingest_document">>,         version => 1},
-        #{name => <<"hecate-rag.embed_document">>,          version => 1},
-        #{name => <<"hecate-rag.upload_knowledge">>,        version => 1},
-        #{name => <<"hecate-rag.add_knowledge">>,           version => 1},
-        #{name => <<"hecate-rag.classify_topics">>,         version => 1},
-        #{name => <<"hecate-rag.prune_chunks">>,            version => 1},
-        #{name => <<"hecate-rag.answer_query">>,           version => 1},
-        #{name => <<"hecate-rag.rerank_results">>,          version => 1},
-        #{name => <<"hecate-rag.get_chunk_by_id">>,         version => 1},
-        #{name => <<"hecate-rag.search_chunks_semantic">>,  version => 1},
-        #{name => <<"hecate-rag.list_chunks_by_source">>,   version => 1},
-        #{name => <<"hecate-rag.get_source_by_id">>,        version => 1},
-        #{name => <<"hecate-rag.list_sources_page">>,       version => 1},
-        #{name => <<"hecate-rag.detect_corpus_change">>,    version => 1},
-        #{name => <<"hecate-rag.schedule_reembed">>,        version => 1}
+        cap(<<"hecate-rag.ingest_document">>,        handle_ingest_document),
+        cap(<<"hecate-rag.embed_document">>,         handle_embed_document),
+        cap(<<"hecate-rag.upload_knowledge">>,       handle_upload_knowledge),
+        cap(<<"hecate-rag.add_knowledge">>,          handle_add_knowledge),
+        cap(<<"hecate-rag.classify_topics">>,        handle_classify_topics),
+        cap(<<"hecate-rag.prune_chunks">>,           handle_prune_chunks),
+        cap(<<"hecate-rag.answer_query">>,           handle_answer_query),
+        cap(<<"hecate-rag.rerank_results">>,         handle_rerank_results),
+        cap(<<"hecate-rag.get_chunk_by_id">>,        handle_get_chunk_by_id),
+        cap(<<"hecate-rag.search_chunks_semantic">>, handle_search_chunks_semantic),
+        cap(<<"hecate-rag.list_chunks_by_source">>,  handle_list_chunks_by_source),
+        cap(<<"hecate-rag.get_source_by_id">>,       handle_get_source_by_id),
+        cap(<<"hecate-rag.list_sources_page">>,      handle_list_sources_page),
+        cap(<<"hecate-rag.detect_corpus_change">>,   handle_detect_corpus_change),
+        cap(<<"hecate-rag.schedule_reembed">>,       handle_schedule_reembed)
     ].
+
+cap(Name, HandlerFun) ->
+    #{name => Name, version => 1,
+      handler => {hecate_om_simple_handler, {hecate_rag_mesh_rpc, HandlerFun}}}.
 
 %% @doc Realm-issued service-principal scope. hecate-realm mints a
 %% credential matching this at provision time.

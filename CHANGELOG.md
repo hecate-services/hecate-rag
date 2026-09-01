@@ -3,7 +3,28 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.1.7] - 2026-09-01
+
+### Changed
+
+- All 15 mesh capabilities now advertise and dispatch through
+  `hecate_om_capabilities:register/1` (via `hecate_rag_service:capabilities/0`'s
+  own `handler` key and `hecate_om_simple_handler`) instead of
+  `hecate_rag_mesh_rpc`'s own hand-rolled `macula:advertise/5` loop,
+  which previously ran independently of, and redundantly with, the
+  record-only advertisements `hecate_om:boot/1` was already publishing
+  for the same 15 names. One registration path now, not two; gains
+  org-scoped dual-registration, DHT publishing, and periodic
+  re-advertise for free. Wire payloads are unchanged — verified against
+  `hecate_om_simple_handler`'s own tests, which pin the exact
+  `{ok, _}`-unwrapping behavior the old direct path had, and against
+  this repo's own compile + dialyzer run against the real published
+  dependency, not just a local checkout.
+- Bumped `hecate_om` `~> 0.16` -> `~> 0.17` (`hecate_om_simple_handler`
+  and `auth_opts/1`, both new there).
+- No capability sets `auth` yet — all 15 stay open, unchanged behavior.
+  `prune_chunks`/`schedule_reembed` are gating candidates, not decided;
+  see `hecate-om/plans/PLAN_UCAN_GATED_CAPABILITIES.md`.
 
 ## [0.1.6] - 2026-09-01
 

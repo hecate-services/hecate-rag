@@ -1,5 +1,5 @@
-%%% @doc Registers Macula RPC handlers for the capabilities
-%%% advertised by `hecate_rag_service:capabilities/0`.
+%%% @doc The actual request-handling logic for every capability
+%%% `hecate_rag_service:capabilities/0` advertises.
 %%%
 %%% Production traffic to hecate-rag flows over the mesh. A plugin
 %%% on a user laptop calls:
@@ -7,19 +7,18 @@
 %%%   macula:call(LocalPool, Realm,
 %%%               <<"hecate-rag.answer_query">>, Params, Timeout).
 %%%
-%%% The local macula-station routes the RPC to the infrastructure
-%%% node running hecate-rag. The SDK invokes the handler registered
-%%% via `macula:advertise/5` — `{?MODULE, handle_rpc_<method>}` here
-%%% — which dispatches into the matching slice handler.
+%%% Advertising and dispatch both go through the standard
+%%% `hecate_om:boot/1` → `hecate_om_capabilities:register/1` path, using
+%%% `hecate_rag_service:capabilities/0''s own `handler' key on each
+%%% capability (`{hecate_om_simple_handler, {?MODULE, HandlerFun}}`) —
+%%% this module no longer advertises anything itself. Each `handle_*/1'
+%%% function here is that `HandlerFun', invoked by
+%%% `hecate_om_simple_handler' on an inbound call; `route/2' is the
+%%% shared method → slice-handler dispatch every `handle_*/1' goes
+%%% through.
 %%%
-%%% The handler form `{module(), atom()}` keeps the dispatch table
-%%% small. We register one entry per capability so the procedure
-%%% string is encoded once at advertise time, not per-call.
-%%%
-%%% Degrades gracefully: if `hecate_om:macula_client/0` returns
-%%% `{error, no_client}` (no station seeds configured / station not
-%%% up yet) the gen_server still starts and `dispatch/2` keeps
-%%% working for tests and the local HTTP admin path.
+%%% `dispatch/2' is a test/debug entry point that bypasses the mesh
+%%% entirely, used by this repo's own test suites.
 -module(hecate_rag_mesh_rpc).
 -behaviour(gen_server).
 
@@ -58,10 +57,8 @@ dispatch(Method, Params) when is_binary(Method), is_map(Params) ->
 %%% gen_server
 
 init([]) ->
-    %% Try to advertise every capability against the SDK. If we
-    %% don't have a client yet, skip — capabilities() is still
-    %% reachable via hecate_om and the local HTTP API.
-    advertise_all(),
+    %% Advertising happens via hecate_om:boot/1's own
+    %% hecate_om_capabilities:register/1 call -- nothing to do here.
     {ok, #{}}.
 
 handle_call({dispatch, Method, Params}, _From, S) ->
@@ -72,42 +69,6 @@ handle_call(_Msg, _From, S) ->
 handle_cast(_Msg, S) -> {noreply, S}.
 handle_info(_Msg, S) -> {noreply, S}.
 terminate(_Reason, _State) -> ok.
-
-%%% Internal: register every capability with the SDK
-
-advertise_all() ->
-    case {hecate_om:macula_client(), hecate_om_identity:realm()} of
-        {{ok, Pool}, {ok, Realm}} -> advertise_each(Pool, Realm);
-        _                         -> ok
-    end.
-
-advertise_each(Pool, Realm) ->
-    lists:foreach(fun(Entry) -> advertise_one(Pool, Realm, Entry) end, handler_table()).
-
-advertise_one(Pool, Realm, {CapName, Handler}) ->
-    try
-        ok = macula:advertise(Pool, Realm, CapName, {?MODULE, Handler}, #{})
-    catch _:_ -> ok
-    end.
-
-handler_table() ->
-    [
-        {<<"hecate-rag.ingest_document">>,        handle_ingest_document},
-        {<<"hecate-rag.embed_document">>,         handle_embed_document},
-        {<<"hecate-rag.upload_knowledge">>,       handle_upload_knowledge},
-        {<<"hecate-rag.add_knowledge">>,          handle_add_knowledge},
-        {<<"hecate-rag.classify_topics">>,        handle_classify_topics},
-        {<<"hecate-rag.prune_chunks">>,           handle_prune_chunks},
-        {<<"hecate-rag.answer_query">>,           handle_answer_query},
-        {<<"hecate-rag.rerank_results">>,         handle_rerank_results},
-        {<<"hecate-rag.get_chunk_by_id">>,        handle_get_chunk_by_id},
-        {<<"hecate-rag.search_chunks_semantic">>, handle_search_chunks_semantic},
-        {<<"hecate-rag.list_chunks_by_source">>,  handle_list_chunks_by_source},
-        {<<"hecate-rag.get_source_by_id">>,       handle_get_source_by_id},
-        {<<"hecate-rag.list_sources_page">>,      handle_list_sources_page},
-        {<<"hecate-rag.detect_corpus_change">>,   handle_detect_corpus_change},
-        {<<"hecate-rag.schedule_reembed">>,       handle_schedule_reembed}
-    ].
 
 %%% Internal: SDK handler entry points (one per capability)
 
