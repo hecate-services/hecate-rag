@@ -12,6 +12,19 @@ on:
     branches: [main]
     tags:     ['v*']
 
+# A tag push and a main push are two different intents (a versioned,
+# pinned rollback image vs. "what watchtower should be tracking right
+# now") and must never race on :latest. Scoping the group to the ref
+# means a burst of pushes to the SAME ref cancels the stale one instead
+# of both finishing out of order and leaving :latest as whichever
+# happened to finish last -- found live 2026-09-01, backfilling 7
+# historical release tags queued 13 concurrent runs that raced to
+# overwrite :latest, and beam03's watchtower flapped between whichever
+# historical version finished next for several minutes.
+concurrency:
+  group: build-and-push-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -29,13 +42,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set tag
+      # A tag push publishes ONLY its own semver tag -- never :latest.
+      # :latest is what watchtower/podman-auto-update track as "current
+      # deploy"; a semver tag is a static, pinned rollback point. Before
+      # this fix, EVERY build (main push or historical tag backfill
+      # alike) pushed :latest unconditionally, so tagging old releases
+      # for rollback purposes could silently roll the live fleet
+      # backwards to whichever one finished building last.
+      - name: Set tags
         id: tag
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "tag=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+            echo "tags=ghcr.io/hecate-services/hecate-rag:${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
+            echo "tags=ghcr.io/hecate-services/hecate-rag:latest" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and push
@@ -44,6 +64,4 @@ jobs:
           context: .
           file: Containerfile
           push: true
-          tags: |
-            ghcr.io/hecate-services/hecate-rag:latest
-            ghcr.io/hecate-services/hecate-rag:${{ steps.tag.outputs.tag }}
+          tags: ${{ steps.tag.outputs.tags }}
