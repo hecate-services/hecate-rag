@@ -1,6 +1,6 @@
 {application, hecate_rag, [
     {description, "Realm-bound RAG service daemon"},
-    {vsn, "0.1.14"},
+    {vsn, "0.1.15"},
     {registered, []},
     {mod, {hecate_rag_app, []}},
     {applications, [

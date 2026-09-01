@@ -3,6 +3,36 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.15] - 2026-09-01
+
+### Fixed
+
+- `manifest.json` had drifted badly from reality: `version` was still
+  `0.1.0` (never bumped across 14 releases), `repository` still pointed
+  at Codeberg instead of GitHub, and `capabilities` listed only 10 of
+  this service's 16 real capabilities -- `upload_knowledge`,
+  `add_knowledge`, `classify_topics`, `get_document_verbatim`,
+  `detect_corpus_change`, and `schedule_reembed` (all real, all
+  advertised on the mesh per `hecate_rag_service:capabilities/0`) were
+  simply missing. Anything reading this file to learn what the service
+  offers -- a realm's discovery/permission tooling included -- was
+  working from a stale, incomplete picture.
+
+### Diagnosed (fixed upstream, not in this repo)
+
+- The intermittent `noproc` seen on live mesh RPC calls in the minutes
+  after a fresh deploy (`search_chunks_semantic`/`answer_query`/
+  `add_knowledge` observed failing on beam03 shortly after a restart)
+  was root-caused to a crash-cascade bug in `hecate_om_capabilities`:
+  one capability's advertise call timing out during a republish tick
+  crashed the whole registration process, which — via a process link —
+  killed every other, already-healthy capability's factory supervisor
+  too. Fixed in `hecate_om` 0.21.0 (per-capability failure isolation)
+  and hardened further in `macula` 10.14.5 (a reused supervisor pid is
+  now checked for liveness first). Neither fix is consumable here until
+  both are published to hex.pm and this repo's `hecate_om` pin is
+  bumped -- tracked as a follow-up, not done in this release.
+
 ## [0.1.14] - 2026-09-01
 
 ### Fixed

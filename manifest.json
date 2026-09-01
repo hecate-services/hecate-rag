@@ -1,14 +1,14 @@
 {
   "name": "hecate-rag",
   "display_name": "RAG",
-  "version": "0.1.0",
+  "version": "0.1.15",
   "description": "Realm-bound RAG service: retrieval over the configured corpora",
   "service_type": "container_daemon",
   "tenancy": "realm",
   "runs_on": "infrastructure_node",
   "callback_module": "hecate_rag_service",
   "image": "ghcr.io/hecate-services/hecate-rag",
-  "repository": "https://codeberg.org/hecate-services/hecate-rag",
+  "repository": "https://github.com/hecate-services/hecate-rag",
   "license": "Apache-2.0",
   "depends_on": [
     "macula-station",
@@ -18,6 +18,9 @@
   "capabilities": [
     "hecate-rag.ingest_document",
     "hecate-rag.embed_document",
+    "hecate-rag.upload_knowledge",
+    "hecate-rag.add_knowledge",
+    "hecate-rag.classify_topics",
     "hecate-rag.prune_chunks",
     "hecate-rag.answer_query",
     "hecate-rag.rerank_results",
@@ -25,7 +28,10 @@
     "hecate-rag.search_chunks_semantic",
     "hecate-rag.list_chunks_by_source",
     "hecate-rag.get_source_by_id",
-    "hecate-rag.list_sources_page"
+    "hecate-rag.list_sources_page",
+    "hecate-rag.get_document_verbatim",
+    "hecate-rag.detect_corpus_change",
+    "hecate-rag.schedule_reembed"
   ],
   "ports": {
     "health": 8470
