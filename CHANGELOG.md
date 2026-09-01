@@ -3,6 +3,22 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.18] - 2026-09-01
+
+### Fixed
+
+- `rebar.config`'s `relx` release version (`{release, {hecate_rag,
+  "..."}, [...]}`) is a THIRD, independent version string -- separate
+  from `src/hecate_rag.app.src`'s `{vsn, ...}` and `manifest.json`'s
+  `version`, and relx does not derive it automatically. It had drifted
+  to `"0.1.14"` through three releases (0.1.15/16/17): the deployed
+  release directory (`/app/releases/0.1.14/`) and `.rel`/`RELEASES`
+  metadata didn't match the app's own reported vsn, even though the
+  compiled `.app` file was correct throughout. Verified locally with a
+  real `rebar3 as prod release` before pushing: now assembles as
+  `hecate_rag-0.1.18`, matching everywhere else. Left a comment at the
+  relx release tuple since nothing enforces the three staying in sync.
+
 ## [0.1.17] - 2026-09-01
 
 ### Fixed
