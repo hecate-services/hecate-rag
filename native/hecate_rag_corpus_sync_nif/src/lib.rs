@@ -296,6 +296,31 @@ mod tests {
         remote.push(&["refs/heads/master:refs/heads/master"], None).unwrap();
     }
 
+    // Every other test here clones/fetches over a plain file path (a local
+    // bare repo) -- none of them exercise the actual HTTPS transport, which
+    // is exactly what let a real bug (`default-features = false` on the
+    // `git2` dep silently dropping the `https` feature, and with it the TLS
+    // backend) ship all the way to production undetected: "there is no TLS
+    // stream available" only surfaced live, against a real
+    // `https://github.com/...` URL, once the two earlier bugs (ownership
+    // check, gen_server timeout) stopped masking it. `octocat/Hello-World`
+    // is GitHub's own long-stable smoke-test repo, chosen so this doesn't
+    // depend on any URL this project itself controls staying up.
+    #[test]
+    fn clones_a_real_repo_over_https() {
+        let local_dir = TempDir::new("https-clone-target");
+        fs::remove_dir(local_dir.path()).unwrap();
+        let path = local_dir.path().to_str().unwrap().to_string();
+
+        match clone_or_sync("https://github.com/octocat/Hello-World.git", &path, "") {
+            Ok(Status::Cloned) => {}
+            Ok(_) => panic!("expected a fresh clone"),
+            Err(SyncError::Git(msg)) => panic!("HTTPS clone failed: {msg}"),
+            Err(SyncError::NotFastForward) => panic!("unexpected NotFastForward on a fresh clone"),
+        }
+        assert!(local_dir.path().join(".git").is_dir());
+    }
+
     #[test]
     fn clones_when_local_path_does_not_exist() {
         let (remote, _origin) = setup_remote_with_content();

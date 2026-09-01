@@ -3,6 +3,26 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.9] - 2026-09-01
+
+### Fixed
+
+- `hecate_rag_corpus_sync_nif` failed every clone/fetch against a real
+  `https://...` URL with `"there is no TLS stream available"` — found
+  live on beam03 immediately after 0.1.8's own two crash-loop fixes
+  landed and stopped masking it. Cause: the crate's `git2` dependency
+  declares `default-features = false` (needed to avoid pulling in
+  `ssh`, deliberately unsupported here) but that also silently drops
+  the `https` feature and its TLS backend — `vendored-libgit2` only
+  controls whether libgit2's C sources are vendored, not which
+  transports get compiled in. No local test caught this because every
+  existing Rust test clones/fetches over a plain file path (a local
+  bare repo), never HTTPS. Fixed by adding `https` and
+  `vendored-openssl` (keeping the "no OS dependency" property intact
+  on Alpine/musl) to the feature list, plus a new test that clones a
+  real public repo over HTTPS — confirmed it reproduces the exact
+  production error without the fix and passes with it.
+
 ## [0.1.8] - 2026-09-01
 
 ### Added
