@@ -1,7 +1,12 @@
 # Plan: Verbatim retrieval + corpus freshness
 
-**Status:** Phases 1-4 implemented and tested; not yet deployed (see
-"Remaining before this is live on beam03").
+**Status:** Deployed on beam03 (v0.1.8 -> v0.1.9 -> v0.1.10). Corpus
+clone + seeding verified live via `hecate-rag.list_sources_page`
+returning real `hecate-corpus/*` content. `get_document_verbatim`
+itself was blocked by an unrelated `hecate_om` timing bug (station-side
+tombstone TTL racing the client's fixed republish period at an
+identical 30s -- see `hecate_om`'s own CHANGELOG `[0.19.0]`), fixed by
+the v0.1.10 dependency bump; not yet re-verified live post-deploy.
 **Created:** 2026-09-01
 **Last Updated:** 2026-09-01
 **Scope:** hecate-rag (this repo)
@@ -294,12 +299,13 @@ call site.
       they share a file name — proven via
       `refresh_scheduler_namespaces_by_repo_to_avoid_collisions`.
 
-## Remaining before this is live on beam03
+## Remaining
 
-- [ ] Push `hecate-rag` and `macula-demo`; `hecate-reconcile.timer` pulls
-      the compose/mount change and `watchtower` deploys the new release
-      carrying Phases 1-4 — no manual enrollment step (Phase 4 replaced
-      the design that needed one).
+- [x] Push `hecate-rag` and `macula-demo`; deployed via watchtower.
+- [ ] Re-verify `hecate-rag.get_document_verbatim` live via `mesh_call`
+      once v0.1.10 (hecate_om 0.19.0) reaches beam03 -- confirms the
+      jitter fix actually resolves the stuck advertisement, not just
+      that it no longer *can* recur.
 - [ ] `PLAN_RAG_MESH.md` A1/A2 before attempting one real whole-corpus
       reseed (directory-by-directory seeding remains the interim path
       until then) — orthogonal to Phase 4's own clone, which walks the

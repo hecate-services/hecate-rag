@@ -3,6 +3,19 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.10] - 2026-09-01
+
+### Fixed
+
+- Bumped `hecate_om` `0.18.0` -> `0.19.0`. Fixes a live bug found on
+  beam03: `get_document_verbatim`'s `procedure_advertisement` stayed
+  advertised but uncallable (`unknown_method`) for 45+ minutes while
+  sibling capabilities from the same advertise batch self-healed,
+  traced to hecate_om's periodic re-advertise timer racing
+  macula-station's tombstone TTL at an identical fixed 30s period. See
+  `hecate_om`'s own CHANGELOG `[0.19.0]` entry for the root cause; no
+  code change needed on this side beyond the dependency bump.
+
 ## [0.1.9] - 2026-09-01
 
 ### Fixed
