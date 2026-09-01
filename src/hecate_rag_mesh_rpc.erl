@@ -39,6 +39,7 @@
     handle_list_chunks_by_source/1,
     handle_get_source_by_id/1,
     handle_list_sources_page/1,
+    handle_get_document_verbatim/1,
     handle_detect_corpus_change/1,
     handle_schedule_reembed/1
 ]).
@@ -85,6 +86,7 @@ handle_search_chunks_semantic(P) -> route(<<"hecate-rag.search_chunks_semantic">
 handle_list_chunks_by_source(P)  -> route(<<"hecate-rag.list_chunks_by_source">>, P).
 handle_get_source_by_id(P)       -> route(<<"hecate-rag.get_source_by_id">>, P).
 handle_list_sources_page(P)      -> route(<<"hecate-rag.list_sources_page">>, P).
+handle_get_document_verbatim(P)  -> route(<<"hecate-rag.get_document_verbatim">>, P).
 handle_detect_corpus_change(P)   -> route(<<"hecate-rag.detect_corpus_change">>, P).
 handle_schedule_reembed(P)       -> route(<<"hecate-rag.schedule_reembed">>, P).
 
@@ -116,6 +118,8 @@ route(<<"hecate-rag.get_source_by_id">>, #{<<"source_id">> := Id}) ->
     get_source_by_id:handle(Id);
 route(<<"hecate-rag.list_sources_page">>, P) ->
     list_sources_page:handle(P);
+route(<<"hecate-rag.get_document_verbatim">>, #{<<"source_path">> := Path}) ->
+    get_document_verbatim:handle(Path);
 route(<<"hecate-rag.detect_corpus_change">>, P) ->
     maybe_detect_corpus_change:detect(P);
 route(<<"hecate-rag.schedule_reembed">>, P) ->

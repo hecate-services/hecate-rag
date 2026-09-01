@@ -3,6 +3,58 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.8] - 2026-09-01
+
+### Added
+
+- `hecate-rag.get_document_verbatim`: exact, byte-for-byte fetch of a
+  corpus document by path, composing the already-existing
+  `rag_store:find_source_by_path/1` + `rag_store:get_source_content/1`
+  (used internally by `schedule_reembed`/`embed_document` but never
+  mesh-exposed) into one new QRY desk
+  (`apps/query_sources/src/get_document_verbatim/`). `get_source_by_id`
+  (the existing mesh-exposed lookup) returns only metadata, never
+  `raw_bytes` — this is the first way to get exact content over the
+  mesh rather than a RAG-reranked approximation of it.
+- `maybe_seed_corpus.erl` now calls `rag_store:upsert_source/1` per
+  file (previously only `put_chunk`), bringing the bulk directory-seed
+  path to parity with the per-document `ingest_document`/`upload_knowledge`
+  paths — bulk-seeded files are exact-fetchable via
+  `get_document_verbatim`, not chunks-only.
+- `refresh_corpus_scheduler` (new gen_server, `apps/refresh_corpus/`):
+  ticks every 2 minutes, hashes every file under the corpus root, and
+  for anything `detect_corpus_change` reports changed, records the
+  request via `schedule_reembed` and immediately refreshes it
+  (`upsert_source` with current bytes, then `maybe_embed_document:embed`)
+  — closes the loop those two capabilities left open since their own
+  introduction (`schedule_reembed` recorded requests but nothing
+  consumed them).
+- `corpus_git_sync` (new gen_server) + `hecate_rag_corpus_sync_nif`
+  (new embedded Rust NIF, `native/hecate_rag_corpus_sync_nif/`, via
+  `rustler` + `git2` with vendored libgit2): fetches `origin` for the
+  corpus checkout's current branch and fast-forwards it every 2
+  minutes, entirely without an OS `git` binary at runtime. `--ff-only`
+  in spirit — a diverged history is reported and left untouched, never
+  merged. Replaces an external bash-script-on-a-systemd-timer design
+  that was drafted but never deployed. `gitoxide`/`gix` was evaluated
+  and rejected: no porcelain-level pull, only low-level pieces to
+  assemble by hand.
+- `scripts/build-corpus-sync-nif.sh` builds the new NIF; the
+  `Containerfile`'s builder stage now runs it (previously only built
+  NIFs for `_checkouts/`-overridden dependencies, never this repo's
+  own `native/`) — verified against a real Alpine/musl container build,
+  not just the local dev machine.
+
+### Changed
+
+- `hecate_om` dependency bumped to 0.18.0 (was locked at 0.17.0; the
+  existing `~> 0.17` constraint already permitted it). Purely additive
+  on `hecate_om`'s side — no behavior change here.
+- `relx`'s release version in `rebar.config` was still `"0.1.6"` despite
+  `hecate_rag.app.src` and `hecate_rag_service:info/0` already reading
+  `"0.1.7"` (missed in that release) — corrected alongside this
+  release's own bump so the built release tarball's name matches.
+
 ## [0.1.7] - 2026-09-01
 
 ### Changed

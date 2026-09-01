@@ -9,6 +9,15 @@ priv/data/
 priv/index/
 data/
 
+# Rust / Cargo (NIF crates under native/)
+native/**/target/
+native/**/Cargo.lock
+
+# NIF artefacts (built into priv/ by scripts/build-*.sh, kept out of git)
+priv/lib/*.so
+priv/lib/*.dylib
+priv/lib/*.dll
+
 .idea/
 *.swp
 .DS_Store

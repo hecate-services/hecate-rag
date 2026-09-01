@@ -11,7 +11,7 @@
 info() ->
     #{
         name        => <<"hecate-rag">>,
-        version     => <<"0.1.7">>,
+        version     => <<"0.1.8">>,
         description => <<"Realm-bound RAG service: retrieval over the configured corpora">>
     }.
 
@@ -33,7 +33,7 @@ health() ->
 %% and — via each entry's `handler' key — actually callable through it
 %% too (`hecate_om_simple_handler' bridges to `hecate_rag_mesh_rpc''s own
 %% one-arity handler functions, so their `route/2' dispatch logic is
-%% unchanged). No capability here sets `auth': all 15 stay open. See
+%% unchanged). No capability here sets `auth': all 16 stay open. See
 %% `plans/PLAN_UCAN_GATED_CAPABILITIES.md' for `prune_chunks' and
 %% `schedule_reembed' as gating candidates, not yet decided.
 capabilities() ->
@@ -51,6 +51,7 @@ capabilities() ->
         cap(<<"hecate-rag.list_chunks_by_source">>,  handle_list_chunks_by_source),
         cap(<<"hecate-rag.get_source_by_id">>,       handle_get_source_by_id),
         cap(<<"hecate-rag.list_sources_page">>,      handle_list_sources_page),
+        cap(<<"hecate-rag.get_document_verbatim">>,  handle_get_document_verbatim),
         cap(<<"hecate-rag.detect_corpus_change">>,   handle_detect_corpus_change),
         cap(<<"hecate-rag.schedule_reembed">>,       handle_schedule_reembed)
     ].

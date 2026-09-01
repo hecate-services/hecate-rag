@@ -27,6 +27,8 @@ COPY rebar.config ./
 COPY src ./src
 COPY apps ./apps
 COPY config ./config
+COPY native ./native
+COPY scripts ./scripts
 
 # `_checkouts/` overrides git deps with local source if present (used by
 # the dev build, where hecate_embed and hecate_vector have unpublished
@@ -56,6 +58,10 @@ RUN set -eu; \
             cd /build/_checkouts/$dep && bash scripts/build-nif.sh; \
         fi; \
     done
+
+# This repo's own NIF (native/, not a checkout) -- corpus git-sync via
+# vendored libgit2. Same RUSTFLAGS crt-static fix above applies.
+RUN cd /build && bash scripts/build-corpus-sync-nif.sh
 
 # Fetch deps + assemble a production release with embedded ERTS.
 RUN cd /build && rebar3 as prod tar

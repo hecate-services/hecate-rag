@@ -3,7 +3,11 @@
 %%% Bulk-loads a directory of markdown into `rag_store'. Walks files,
 %%% header-chunks each, persists via `rag_store:put_chunk/3' — embedding
 %%% happens automatically (barrel record-mode policy), no separate embed
-%%% call to make here.
+%%% call to make here. Also persists one verbatim `rag_store:upsert_source/1'
+%%% record per file (`document_id'/`source_path' both the file's
+%%% corpus-relative path), matching what `ingest_document'/`upload_knowledge'
+%%% already do per-document — bulk-seeded files are exact-fetchable the
+%%% same way single-uploaded ones are, not chunks-only.
 %%%
 %%% This is a control-plane operation (rebuild from filesystem), the bulk
 %%% counterpart to the per-document `ingest_document'/`embed_document'
@@ -17,6 +21,8 @@
     chunks      := non_neg_integer(),
     embeds      := non_neg_integer(),
     embed_errors := non_neg_integer(),
+    sources     := non_neg_integer(),
+    source_errors := non_neg_integer(),
     skipped     := non_neg_integer(),
     elapsed_ms  := non_neg_integer()
 }.
@@ -64,7 +70,8 @@ walk_and_index(RootDir, Glob, Excludes) ->
     Files = filelib:wildcard(filename:join(RootDir, Glob)),
     Filtered = lists:filter(fun(F) -> not excluded(F, Excludes) end, Files),
     Stats0 = #{files => 0, chunks => 0, embeds => 0,
-               embed_errors => 0, skipped => 0, elapsed_ms => 0},
+               embed_errors => 0, sources => 0, source_errors => 0,
+               skipped => 0, elapsed_ms => 0},
     logger:info("[seed_corpus] starting: root=~ts files=~p (after excludes from ~p)",
                 [RootDir, length(Filtered), length(Files)]),
     Stats = lists:foldl(
@@ -80,16 +87,48 @@ walk_and_index(RootDir, Glob, Excludes) ->
     {ok, Stats1}.
 
 ingest_file(AbsPath, RootDir, Acc0) ->
-    RelPath = list_to_binary(string:replace(AbsPath, RootDir ++ "/", "", leading)),
+    %% RootDir ++ "/" only strips correctly when RootDir itself has no
+    %% trailing slash -- a caller-supplied RootDir ending in "/" (e.g.
+    %% Common Test's own priv_dir) doubles the slash, the prefix never
+    %% matches, and RelPath silently becomes the full absolute path
+    %% instead of relative. Normalize first.
+    Prefix = string:trim(RootDir, trailing, "/") ++ "/",
+    RelPath = list_to_binary(string:replace(AbsPath, Prefix, "", leading)),
     case markdown_chunker:chunk_file(AbsPath, RelPath) of
-        {ok, []} ->
-            bump(skipped, Acc0);
         {ok, Chunks} ->
-            fold_chunks(Chunks, Acc0);
+            Acc1 = store_source(AbsPath, RelPath, Acc0),
+            store_chunks_or_skip(Chunks, Acc1);
         {error, Reason} ->
             logger:warning("[seed_corpus] read error: ~ts ~p", [AbsPath, Reason]),
             bump(skipped, Acc0)
     end.
+
+store_chunks_or_skip([], Acc)     -> bump(skipped, Acc);
+store_chunks_or_skip(Chunks, Acc) -> fold_chunks(Chunks, Acc).
+
+%% Verbatim record alongside the chunks above -- same file, read once
+%% more here since markdown_chunker:chunk_file/2 keeps its own read
+%% internal rather than returning the bytes it consumed.
+store_source(AbsPath, RelPath, Acc) ->
+    case file:read_file(AbsPath) of
+        {ok, RawBytes} ->
+            Source = #{
+                document_id => RelPath,
+                source_path => RelPath,
+                source_type => <<"markdown">>,
+                raw_bytes   => RawBytes
+            },
+            source_stored(rag_store:upsert_source(Source), RelPath, Acc);
+        {error, Reason} ->
+            logger:warning("[seed_corpus] source read error path=~ts ~p", [RelPath, Reason]),
+            bump(source_errors, Acc)
+    end.
+
+source_stored(ok, _RelPath, Acc) ->
+    bump(sources, Acc);
+source_stored({error, Reason}, RelPath, Acc) ->
+    logger:warning("[seed_corpus] source store error path=~ts ~p", [RelPath, Reason]),
+    bump(source_errors, Acc).
 
 fold_chunks(Chunks, Acc0) ->
     lists:foldl(fun(C, Acc) -> store_chunk(C, Acc) end, Acc0, Chunks).

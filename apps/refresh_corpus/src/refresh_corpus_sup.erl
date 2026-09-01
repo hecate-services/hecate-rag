@@ -10,5 +10,8 @@ start_link() ->
 init([]) ->
     {ok, {
         #{strategy => one_for_one, intensity => 10, period => 10},
-        []
+        [
+            #{id => refresh_corpus_scheduler,
+              start => {refresh_corpus_scheduler, start_link, []}}
+        ]
     }}.

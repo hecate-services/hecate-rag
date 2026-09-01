@@ -13,11 +13,14 @@
 
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([ingest_embed_search_prune_round_trip/1, sources_query_round_trip/1,
-         embed_without_ingest_errors/1]).
+         embed_without_ingest_errors/1, seed_corpus_creates_verbatim_source/1,
+         get_document_verbatim_round_trip/1,
+         refresh_scheduler_detects_and_refreshes_change/1]).
 
 all() ->
     [ingest_embed_search_prune_round_trip, sources_query_round_trip,
-     embed_without_ingest_errors].
+     embed_without_ingest_errors, seed_corpus_creates_verbatim_source,
+     get_document_verbatim_round_trip, refresh_scheduler_detects_and_refreshes_change].
 
 init_per_suite(Config) ->
     ok = rag_test_helpers:start_hecate_rag(),
@@ -64,6 +67,77 @@ embed_without_ingest_errors(_Config) ->
     DocId = fresh_id(),
     Result = maybe_embed_document:embed(#{<<"document_id">> => DocId}),
     ?assertEqual({error, not_ingested}, Result).
+
+%% seed_corpus is the bulk directory-walk path (distinct from ingest/1's
+%% per-document one above) — this asserts it now also leaves a verbatim
+%% source record per file, not chunks-only, and that re-seeding upserts
+%% rather than erroring or duplicating.
+seed_corpus_creates_verbatim_source(Config) ->
+    SeedId = fresh_id(),
+    RelPath = <<"quokka-seed-", SeedId/binary, ".md">>,
+    TmpDir = ?config(priv_dir, Config),
+    Content = <<"# Quokka Seeding\n\nSeeded straight from a directory "
+                "walk, not a per-document upload.\n">>,
+    ok = file:write_file(filename:join(TmpDir, RelPath), Content),
+
+    {ok, _Stats} = maybe_seed_corpus:seed(seed_cmd(SeedId, TmpDir)),
+    ?assertEqual({ok, #{source_path => RelPath, raw_bytes => Content}},
+                 rag_store:get_source_content(RelPath)),
+
+    %% Re-seeding the same file (content unchanged) upserts, not errors.
+    {ok, _Stats2} = maybe_seed_corpus:seed(seed_cmd(SeedId, TmpDir)),
+    ?assertEqual({ok, #{source_path => RelPath, raw_bytes => Content}},
+                 rag_store:get_source_content(RelPath)).
+
+seed_cmd(SeedId, RootDir) ->
+    #{<<"seed_id">> => SeedId, <<"root_dir">> => list_to_binary(RootDir),
+      <<"glob">> => <<"*.md">>}.
+
+%% get_document_verbatim composes find_source_by_path + get_source_content
+%% -- this exercises that composition against a per-document-ingested
+%% source (seed_corpus_creates_verbatim_source above already covers the
+%% bulk-seeded path into the same underlying storage).
+get_document_verbatim_round_trip(_Config) ->
+    DocId = fresh_id(),
+    SourcePath = <<"verbatim-fetch-", DocId/binary, ".md">>,
+    Content = <<"# Verbatim\n\nExact bytes, not a semantic approximation.\n">>,
+    {ok, _} = ingest(DocId, SourcePath, Content),
+
+    ?assertEqual({ok, #{source_path => SourcePath, raw_bytes => Content}},
+                 get_document_verbatim:handle(SourcePath)),
+    ?assertEqual({error, not_found},
+                 get_document_verbatim:handle(<<"no-such-path.md">>)).
+
+%% refresh_corpus_scheduler:scan/0 is the internal half of the freshness
+%% loop (the external half -- keeping the corpus checkout in sync with
+%% git -- is a separate systemd timer, not exercised here). Points
+%% corpus_root at a fixture dir instead of the real /corpus mount.
+refresh_scheduler_detects_and_refreshes_change(Config) ->
+    DocId = fresh_id(),
+    RelPath = <<"refresh-scan-", DocId/binary, ".md">>,
+    TmpDir = ?config(priv_dir, Config),
+    AbsPath = filename:join(TmpDir, RelPath),
+    ok = application:set_env(hecate_rag, corpus_root, TmpDir),
+
+    Original = <<"# Before\n\nOriginal content.\n">>,
+    ok = file:write_file(AbsPath, Original),
+    ok = refresh_corpus_scheduler:scan(),
+    ?assertEqual({ok, #{source_path => RelPath, raw_bytes => Original}},
+                 rag_store:get_source_content(RelPath)),
+
+    %% Unchanged content -- a second scan is a no-op, same content still there.
+    ok = refresh_corpus_scheduler:scan(),
+    ?assertEqual({ok, #{source_path => RelPath, raw_bytes => Original}},
+                 rag_store:get_source_content(RelPath)),
+
+    %% Changed content -- the next scan picks it up.
+    Updated = <<"# After\n\nUpdated content, different bytes.\n">>,
+    ok = file:write_file(AbsPath, Updated),
+    ok = refresh_corpus_scheduler:scan(),
+    ?assertEqual({ok, #{source_path => RelPath, raw_bytes => Updated}},
+                 rag_store:get_source_content(RelPath)),
+
+    ok = application:unset_env(hecate_rag, corpus_root).
 
 %%% Internals
 

@@ -8,6 +8,8 @@
 %%%     handlers (one-method-per-handler form, see module doc)
 %%%   - hecate_rag_federation: configures macula_rag with the local
 %%%     pool+realm and registers the federation responder callback
+%%%   - corpus_git_sync: periodic fetch+fast-forward of the corpus
+%%%     checkout via the embedded hecate_rag_corpus_sync_nif
 %%%
 %%% The umbrella apps (embed_corpus, refresh_corpus, …) start
 %%% themselves via their entries in hecate_rag.app.src.
@@ -29,7 +31,8 @@ init([]) ->
     Children = [
         cowboy_child(),
         worker(hecate_rag_mesh_rpc),
-        worker(hecate_rag_federation)
+        worker(hecate_rag_federation),
+        worker(corpus_git_sync)
     ],
     {ok, {SupFlags, Children}}.
 
