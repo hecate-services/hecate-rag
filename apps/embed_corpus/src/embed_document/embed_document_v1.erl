@@ -30,11 +30,19 @@ new(#{document_id := Id}) ->
 new(_) ->
     {error, missing_document_id}.
 
+%% Uses hecate_om_wire:field/2, not a hard #{<<"document_id">> := Id}
+%% pattern -- macula's frame decoder atomizes an inbound payload's keys
+%% (binary_to_existing_atom), so a hard binary-key match here silently
+%% never matches a real mesh caller's payload. See hecate_om_wire's own
+%% moduledoc and hecate-corpus's antipatterns skill for the full story.
 -spec from_map(map()) -> {ok, t()} | {error, term()}.
-from_map(#{<<"document_id">> := Id}) ->
-    {ok, #embed_document_v1{document_id = Id}};
+from_map(Map) when is_map(Map) ->
+    from_map_(hecate_om_wire:field(<<"document_id">>, Map));
 from_map(_) ->
     {error, missing_document_id}.
+
+from_map_(undefined) -> {error, missing_document_id};
+from_map_(Id)        -> {ok, #embed_document_v1{document_id = Id}}.
 
 -spec validate(t()) -> ok | {error, term()}.
 validate(#embed_document_v1{document_id = undefined}) -> {error, missing_document_id};

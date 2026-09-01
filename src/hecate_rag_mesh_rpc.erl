@@ -108,18 +108,18 @@ route(<<"hecate-rag.answer_query">>, P) ->
     answer_query_result(maybe_answer_query:retrieve(P));
 route(<<"hecate-rag.rerank_results">>, P) ->
     rerank_result(maybe_rerank_results:rerank(P));
-route(<<"hecate-rag.get_chunk_by_id">>, #{<<"chunk_id">> := Id}) ->
-    get_chunk_by_id:handle(Id);
+route(<<"hecate-rag.get_chunk_by_id">>, P) ->
+    get_chunk_by_id:handle(hecate_om_wire:field(<<"chunk_id">>, P));
 route(<<"hecate-rag.search_chunks_semantic">>, P) ->
     search_chunks_semantic:handle(P);
 route(<<"hecate-rag.list_chunks_by_source">>, P) ->
     list_chunks_by_source:handle(P);
-route(<<"hecate-rag.get_source_by_id">>, #{<<"source_id">> := Id}) ->
-    get_source_by_id:handle(Id);
+route(<<"hecate-rag.get_source_by_id">>, P) ->
+    get_source_by_id:handle(hecate_om_wire:field(<<"source_id">>, P));
 route(<<"hecate-rag.list_sources_page">>, P) ->
     list_sources_page:handle(P);
-route(<<"hecate-rag.get_document_verbatim">>, #{<<"source_path">> := Path}) ->
-    get_document_verbatim:handle(Path);
+route(<<"hecate-rag.get_document_verbatim">>, P) ->
+    get_document_verbatim:handle(hecate_om_wire:field(<<"source_path">>, P));
 route(<<"hecate-rag.detect_corpus_change">>, P) ->
     maybe_detect_corpus_change:detect(P);
 route(<<"hecate-rag.schedule_reembed">>, P) ->

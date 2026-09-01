@@ -33,16 +33,26 @@ new(#{document_id := Id} = Params) ->
 new(_) ->
     {error, missing_document_id}.
 
+%% Uses hecate_om_wire:field/2, not a hard #{<<"document_id">> := Id}
+%% pattern -- macula's frame decoder atomizes an inbound payload's keys
+%% (binary_to_existing_atom), so a hard binary-key match here silently
+%% never matches a real mesh caller's payload. See hecate_om_wire's own
+%% moduledoc and hecate-corpus's antipatterns skill for the full story.
 -spec from_map(map()) -> {ok, t()} | {error, term()}.
-from_map(#{<<"document_id">> := Id} = Map) ->
-    {ok, #ingest_document_v1{
-        document_id = Id,
-        source_path = maps:get(<<"source_path">>, Map, undefined),
-        source_type = maps:get(<<"source_type">>, Map, undefined),
-        raw_bytes = maps:get(<<"raw_bytes">>, Map, undefined)
-    }};
+from_map(Map) when is_map(Map) ->
+    from_map_(hecate_om_wire:field(<<"document_id">>, Map), Map);
 from_map(_) ->
     {error, missing_document_id}.
+
+from_map_(undefined, _Map) ->
+    {error, missing_document_id};
+from_map_(Id, Map) ->
+    {ok, #ingest_document_v1{
+        document_id = Id,
+        source_path = hecate_om_wire:field(<<"source_path">>, Map),
+        source_type = hecate_om_wire:field(<<"source_type">>, Map),
+        raw_bytes = hecate_om_wire:field(<<"raw_bytes">>, Map)
+    }}.
 
 -spec validate(t()) -> ok | {error, term()}.
 validate(#ingest_document_v1{document_id = undefined}) -> {error, missing_document_id};

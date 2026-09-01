@@ -1,12 +1,11 @@
 # Plan: Verbatim retrieval + corpus freshness
 
-**Status:** Deployed on beam03 (v0.1.8 -> v0.1.9 -> v0.1.10). Corpus
-clone + seeding verified live via `hecate-rag.list_sources_page`
-returning real `hecate-corpus/*` content. `get_document_verbatim`
-itself was blocked by an unrelated `hecate_om` timing bug (station-side
-tombstone TTL racing the client's fixed republish period at an
-identical 30s -- see `hecate_om`'s own CHANGELOG `[0.19.0]`), fixed by
-the v0.1.10 dependency bump; not yet re-verified live post-deploy.
+**Status:** Deployed on beam03 (v0.1.12). Corpus clone + seeding
+verified live via `hecate-rag.list_sources_page` returning real
+`hecate-corpus/*` content. `get_document_verbatim` was blocked by
+CHANGELOG `[0.1.12]`'s mesh-payload atom/binary key hazard (Demon 60 in
+`hecate-corpus/skills/antipatterns/erlang.md`), now fixed at the
+source across every affected entry point, not just this one.
 **Created:** 2026-09-01
 **Last Updated:** 2026-09-01
 **Scope:** hecate-rag (this repo)
@@ -302,10 +301,9 @@ call site.
 ## Remaining
 
 - [x] Push `hecate-rag` and `macula-demo`; deployed via watchtower.
-- [ ] Re-verify `hecate-rag.get_document_verbatim` live via `mesh_call`
-      once v0.1.10 (hecate_om 0.19.0) reaches beam03 -- confirms the
-      jitter fix actually resolves the stuck advertisement, not just
-      that it no longer *can* recur.
+- [ ] Re-verify `hecate-rag.get_document_verbatim`, `get_chunk_by_id`,
+      `get_source_by_id`, and `search_chunks_semantic`/`answer_query`
+      live via `mesh_call` once v0.1.12 reaches beam03.
 - [ ] `PLAN_RAG_MESH.md` A1/A2 before attempting one real whole-corpus
       reseed (directory-by-directory seeding remains the interim path
       until then) — orthogonal to Phase 4's own clone, which walks the

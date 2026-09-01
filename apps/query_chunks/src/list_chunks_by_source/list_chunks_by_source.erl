@@ -7,15 +7,27 @@
 -define(DEFAULT_LIMIT, 100).
 -define(MAX_LIMIT, 500).
 
+%% Uses hecate_om_wire:field/2, not a hard #{<<"source_path">> := ...}
+%% pattern -- macula's frame decoder atomizes an inbound payload's keys
+%% (binary_to_existing_atom), so a hard binary-key match here silently
+%% never matches a real mesh caller's payload. See hecate_om_wire's own
+%% moduledoc and hecate-corpus's antipatterns skill for the full story.
 -spec handle(map()) -> {ok, [map()]} | {error, term()}.
-handle(#{<<"source_path">> := SourcePath} = Params)
-  when is_binary(SourcePath), SourcePath =/= <<>> ->
-    rag_store:list_chunks_by_source(SourcePath, limit(Params));
+handle(Params) when is_map(Params) ->
+    handle_(hecate_om_wire:field(<<"source_path">>, Params), Params);
 handle(_Params) ->
     {error, missing_source_path}.
 
-limit(#{<<"limit">> := L}) -> min(to_pos_int(L), ?MAX_LIMIT);
-limit(_)                   -> ?DEFAULT_LIMIT.
+handle_(SourcePath, Params) when is_binary(SourcePath), SourcePath =/= <<>> ->
+    rag_store:list_chunks_by_source(SourcePath, limit(Params));
+handle_(_SourcePath, _Params) ->
+    {error, missing_source_path}.
+
+limit(Params) ->
+    case hecate_om_wire:field(<<"limit">>, Params) of
+        undefined -> ?DEFAULT_LIMIT;
+        L         -> min(to_pos_int(L), ?MAX_LIMIT)
+    end.
 
 to_pos_int(Bin) ->
     case (catch binary_to_integer(Bin)) of

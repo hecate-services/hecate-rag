@@ -3,6 +3,53 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.12] - 2026-09-01
+
+### Fixed
+
+- **The actual root cause of `get_document_verbatim`'s `unknown_method`**,
+  and a much wider bug alongside it: macula's frame decoder atomizes an
+  inbound mesh RPC payload's keys (`binary_to_existing_atom`), but
+  every affected entry point here hard-matched a binary key, so a real
+  caller's payload silently never matched. Three different failure
+  shapes depending on where the mismatch lived:
+  - `route/2` clauses that destructured a key directly
+    (`get_document_verbatim`, `get_chunk_by_id`, `get_source_by_id`)
+    fell through to the generic catch-all, returning `unknown_method`
+    for a correctly-advertised, correctly-implemented procedure.
+  - Every `*_v1.erl` command's `from_map/1` (`ingest_document`,
+    `embed_document`, `add_knowledge`, `upload_knowledge`,
+    `prune_chunks`, `classify_topics`, `detect_corpus_change`,
+    `schedule_reembed`, `rerank_results`) fell through to its own
+    catch-all, returning a believable-sounding domain error
+    (`missing_aggregate_id`, `missing_document_id`, etc.) even when the
+    field was genuinely present.
+  - `search_chunks_semantic`'s dual-shape dispatch fell through to
+    `query_text_or_vector_required` even when a valid `query_text` was
+    supplied. `answer_query`/`mesh_recall` inherited this (thin
+    pass-through to the same handler).
+  - `list_chunks_by_source`, `list_sources_page`, and
+    `maybe_classify_topics`'s `mode/1` had the same hazard on their
+    optional/secondary fields.
+
+  Fixed by routing every one of these through `hecate_om_wire:field/2,3`
+  (ships with `hecate_om`, tries the atom form first, binary form
+  second) instead of a hard pattern match or `maps:get(<<"...">>, ...)`
+  literal -- safe for both a mesh-delivered (atom-keyed) and an
+  HTTP/jsx-decoded (binary-keyed only) payload hitting the same code.
+  New `wire_field_tolerance_tests.erl` (13 EUnit tests) proves the
+  atom-keyed shape now works; verified against the pre-fix code via a
+  deliberate revert (2 failures, for exactly this reason) before
+  restoring the fix.
+
+  The earlier v0.1.10 (`hecate_om` republish jitter) and v0.1.11
+  (capability list reorder) changes this session were both chasing a
+  wrong theory for this exact symptom -- neither is wrong on its own
+  merits (the jitter fix is real hardening against a separate, genuine
+  station/client timing hazard), but neither was the actual cause here.
+  See `hecate-corpus/skills/antipatterns/erlang.md` Demon 60 for the
+  full writeup.
+
 ## [0.1.11] - 2026-09-01
 
 ### Changed (diagnostic, not a fix)

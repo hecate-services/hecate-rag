@@ -11,11 +11,22 @@
 handle(Params) when is_map(Params) ->
     rag_store:list_sources(offset(Params), limit(Params)).
 
-offset(#{<<"offset">> := O}) -> to_non_neg_int(O, 0);
-offset(_)                    -> 0.
+%% Uses hecate_om_wire:field/2, not hard #{<<"offset">> := ...} / <<"limit">>
+%% patterns -- macula's frame decoder atomizes an inbound payload's keys
+%% (binary_to_existing_atom), so a hard binary-key match here silently
+%% never sees a real mesh caller's paging params. See hecate_om_wire's
+%% own moduledoc and hecate-corpus's antipatterns skill for the full story.
+offset(Params) ->
+    case hecate_om_wire:field(<<"offset">>, Params) of
+        undefined -> 0;
+        O         -> to_non_neg_int(O, 0)
+    end.
 
-limit(#{<<"limit">> := L}) -> min(to_pos_int(L, ?DEFAULT_LIMIT), ?MAX_LIMIT);
-limit(_)                   -> ?DEFAULT_LIMIT.
+limit(Params) ->
+    case hecate_om_wire:field(<<"limit">>, Params) of
+        undefined -> ?DEFAULT_LIMIT;
+        L         -> min(to_pos_int(L, ?DEFAULT_LIMIT), ?MAX_LIMIT)
+    end.
 
 to_pos_int(Bin, Default) ->
     case to_int(Bin) of

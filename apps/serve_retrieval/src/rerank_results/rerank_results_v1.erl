@@ -40,16 +40,26 @@ new(#{query_id := Id} = Params) ->
 new(_) ->
     {error, missing_aggregate_id}.
 
+%% Uses hecate_om_wire:field/2, not a hard #{<<"query_id">> := Id}
+%% pattern -- macula's frame decoder atomizes an inbound payload's keys
+%% (binary_to_existing_atom), so a hard binary-key match here silently
+%% never matches a real mesh caller's payload. See hecate_om_wire's own
+%% moduledoc and hecate-corpus's antipatterns skill for the full story.
 -spec from_map(map()) -> {ok, t()} | {error, term()}.
-from_map(#{<<"query_id">> := Id} = Map) ->
-    {ok, #rerank_results_v1{
-        query_id = Id,
-        query_text = maps:get(<<"query_text">>, Map, undefined),
-        hits = maps:get(<<"hits">>, Map, undefined),
-        reranker_model = maps:get(<<"reranker_model">>, Map, undefined)
-    }};
+from_map(Map) when is_map(Map) ->
+    from_map_(hecate_om_wire:field(<<"query_id">>, Map), Map);
 from_map(_) ->
     {error, missing_aggregate_id}.
+
+from_map_(undefined, _Map) ->
+    {error, missing_aggregate_id};
+from_map_(Id, Map) ->
+    {ok, #rerank_results_v1{
+        query_id = Id,
+        query_text = hecate_om_wire:field(<<"query_text">>, Map),
+        hits = hecate_om_wire:field(<<"hits">>, Map),
+        reranker_model = hecate_om_wire:field(<<"reranker_model">>, Map)
+    }}.
 
 %% `query_text'/`hits' are both load-bearing for `maybe_rerank_results'
 %% (nothing to score against, and nothing to reorder, without them).

@@ -16,6 +16,9 @@
 -module(maybe_classify_topics).
 
 -export([classify/1]).
+%% mode/1 exported for unit testability, matching this codebase's own
+%% convention for pure helpers (see hecate_om_capabilities.erl).
+-export([mode/1]).
 
 -define(SAMPLE_CHUNK_COUNT, 3).
 -define(SAMPLE_MAX_CHARS, 2000).
@@ -106,8 +109,13 @@ sample_text(Chunks) ->
 path_or_id(<<>>, Id) -> Id;
 path_or_id(Path, _)   -> Path.
 
+%% Uses hecate_om_wire:field/2, not maps:get(<<"mode">>, ...) -- macula's
+%% frame decoder atomizes an inbound payload's keys (binary_to_existing_atom),
+%% so a hard binary-key lookup here silently never sees a real mesh
+%% caller's `mode' field. See hecate_om_wire's own moduledoc and
+%% hecate-corpus's antipatterns skill for the full story.
 mode(Params) ->
-    case maps:get(<<"mode">>, Params, document) of
+    case hecate_om_wire:field(<<"mode">>, Params, document) of
         <<"per_chunk">> -> per_chunk;
         _                -> document
     end.

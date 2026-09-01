@@ -25,15 +25,28 @@
 -define(DEFAULT_TOP_K, 10).
 -define(TOPIC_OVERFETCH_MULTIPLIER, 3).
 
+%% Uses hecate_om_wire:field/2 throughout for PARAMS lookups (query
+%% args from the wire), not hard #{<<"...">> := ...} patterns --
+%% macula's frame decoder atomizes an inbound payload's keys
+%% (binary_to_existing_atom), so a hard binary-key match here silently
+%% never matches a real mesh caller's payload. See hecate_om_wire's own
+%% moduledoc and hecate-corpus's antipatterns skill for the full story.
+%% `has_any_topic/2''s own `Meta'/`Topics' lookups are UNCHANGED -- that
+%% map is a stored chunk's own internal metadata from rag_store, never
+%% wire input, so it isn't exposed to this hazard.
 -spec handle(map()) -> {ok, [map()]} | {error, term()}.
-handle(#{<<"query_vector">> := V} = Params) when is_list(V) ->
-    search_with_topics(Params, fun() -> rag_store:search_vector(V, fetch_k(Params)) end);
-handle(#{<<"query_text">> := Text} = Params) when is_binary(Text) ->
-    search_with_topics(Params, fun() -> rag_store:search_text(Text, fetch_k(Params)) end);
 handle(Params) when is_map(Params) ->
-    {error, query_text_or_vector_required};
+    handle_(hecate_om_wire:field(<<"query_vector">>, Params),
+           hecate_om_wire:field(<<"query_text">>, Params), Params);
 handle(_) ->
     {error, bad_params}.
+
+handle_(V, _Text, Params) when is_list(V) ->
+    search_with_topics(Params, fun() -> rag_store:search_vector(V, fetch_k(Params)) end);
+handle_(_V, Text, Params) when is_binary(Text) ->
+    search_with_topics(Params, fun() -> rag_store:search_text(Text, fetch_k(Params)) end);
+handle_(_V, _Text, _Params) ->
+    {error, query_text_or_vector_required}.
 
 search_with_topics(Params, SearchFun) ->
     case SearchFun() of
@@ -44,10 +57,13 @@ search_with_topics(Params, SearchFun) ->
             E
     end.
 
-maybe_filter_by_topics(Hits, #{<<"topics">> := Topics}) when is_list(Topics), Topics =/= [] ->
+maybe_filter_by_topics(Hits, Params) ->
+    maybe_filter_by_topics_(Hits, hecate_om_wire:field(<<"topics">>, Params)).
+
+maybe_filter_by_topics_(Hits, Topics) when is_list(Topics), Topics =/= [] ->
     TopicSet = sets:from_list([normalize_topic(T) || T <- Topics]),
     [H || H <- Hits, has_any_topic(H, TopicSet)];
-maybe_filter_by_topics(Hits, _Params) ->
+maybe_filter_by_topics_(Hits, _Topics) ->
     Hits.
 
 has_any_topic(Hit, TopicSet) ->
@@ -62,10 +78,16 @@ normalize_topic(T) when is_list(T)   -> normalize_topic(list_to_binary(T)).
 %% When filtering by topics, over-fetch from the vector index so the
 %% post-filter still has enough candidates to fill top_k. Without a
 %% topic filter, fetch exactly top_k.
-fetch_k(#{<<"topics">> := Topics} = Params) when is_list(Topics), Topics =/= [] ->
-    top_k(Params) * ?TOPIC_OVERFETCH_MULTIPLIER;
 fetch_k(Params) ->
+    fetch_k_(hecate_om_wire:field(<<"topics">>, Params), Params).
+
+fetch_k_(Topics, Params) when is_list(Topics), Topics =/= [] ->
+    top_k(Params) * ?TOPIC_OVERFETCH_MULTIPLIER;
+fetch_k_(_Topics, Params) ->
     top_k(Params).
 
-top_k(#{<<"top_k">> := N}) when is_integer(N), N > 0, N =< 100 -> N;
-top_k(_)                                                       -> ?DEFAULT_TOP_K.
+top_k(Params) ->
+    case hecate_om_wire:field(<<"top_k">>, Params) of
+        N when is_integer(N), N > 0, N =< 100 -> N;
+        _                                       -> ?DEFAULT_TOP_K
+    end.

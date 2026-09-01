@@ -31,15 +31,25 @@ new(#{text := Text} = Params) ->
 new(_) ->
     {error, missing_text}.
 
+%% Uses hecate_om_wire:field/2, not a hard #{<<"text">> := Text}
+%% pattern -- macula's frame decoder atomizes an inbound payload's keys
+%% (binary_to_existing_atom), so a hard binary-key match here silently
+%% never matches a real mesh caller's payload. See hecate_om_wire's own
+%% moduledoc and hecate-corpus's antipatterns skill for the full story.
 -spec from_map(map()) -> {ok, t()} | {error, term()}.
-from_map(#{<<"text">> := Text} = Map) ->
-    {ok, #add_knowledge_v1{
-        text         = Text,
-        source_label = maps:get(<<"source_label">>, Map, undefined),
-        topics       = maps:get(<<"topics">>, Map, undefined)
-    }};
+from_map(Map) when is_map(Map) ->
+    from_map_(hecate_om_wire:field(<<"text">>, Map), Map);
 from_map(_) ->
     {error, missing_text}.
+
+from_map_(undefined, _Map) ->
+    {error, missing_text};
+from_map_(Text, Map) ->
+    {ok, #add_knowledge_v1{
+        text         = Text,
+        source_label = hecate_om_wire:field(<<"source_label">>, Map),
+        topics       = hecate_om_wire:field(<<"topics">>, Map)
+    }}.
 
 -spec validate(t()) -> ok | {error, term()}.
 validate(#add_knowledge_v1{text = undefined}) -> {error, missing_text};

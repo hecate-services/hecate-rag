@@ -34,16 +34,26 @@ new(#{corpus_id := Id} = Params) ->
 new(_) ->
     {error, missing_aggregate_id}.
 
+%% Uses hecate_om_wire:field/2, not a hard #{<<"corpus_id">> := Id}
+%% pattern -- macula's frame decoder atomizes an inbound payload's keys
+%% (binary_to_existing_atom), so a hard binary-key match here silently
+%% never matches a real mesh caller's payload. See hecate_om_wire's own
+%% moduledoc and hecate-corpus's antipatterns skill for the full story.
 -spec from_map(map()) -> {ok, t()} | {error, term()}.
-from_map(#{<<"corpus_id">> := Id} = Map) ->
-    {ok, #detect_corpus_change_v1{
-        corpus_id = Id,
-        source_path = maps:get(<<"source_path">>, Map, undefined),
-        kind = maps:get(<<"kind">>, Map, undefined),
-        diff_hash = maps:get(<<"diff_hash">>, Map, undefined)
-    }};
+from_map(Map) when is_map(Map) ->
+    from_map_(hecate_om_wire:field(<<"corpus_id">>, Map), Map);
 from_map(_) ->
     {error, missing_aggregate_id}.
+
+from_map_(undefined, _Map) ->
+    {error, missing_aggregate_id};
+from_map_(Id, Map) ->
+    {ok, #detect_corpus_change_v1{
+        corpus_id = Id,
+        source_path = hecate_om_wire:field(<<"source_path">>, Map),
+        kind = hecate_om_wire:field(<<"kind">>, Map),
+        diff_hash = hecate_om_wire:field(<<"diff_hash">>, Map)
+    }}.
 
 %% `source_path'/`diff_hash' are required here, not optional as the
 %% record type suggests -- both are load-bearing for

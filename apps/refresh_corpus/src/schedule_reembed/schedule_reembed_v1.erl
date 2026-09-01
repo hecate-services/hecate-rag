@@ -34,16 +34,26 @@ new(#{corpus_id := Id} = Params) ->
 new(_) ->
     {error, missing_aggregate_id}.
 
+%% Uses hecate_om_wire:field/2, not a hard #{<<"corpus_id">> := Id}
+%% pattern -- macula's frame decoder atomizes an inbound payload's keys
+%% (binary_to_existing_atom), so a hard binary-key match here silently
+%% never matches a real mesh caller's payload. See hecate_om_wire's own
+%% moduledoc and hecate-corpus's antipatterns skill for the full story.
 -spec from_map(map()) -> {ok, t()} | {error, term()}.
-from_map(#{<<"corpus_id">> := Id} = Map) ->
-    {ok, #schedule_reembed_v1{
-        corpus_id = Id,
-        source_path = maps:get(<<"source_path">>, Map, undefined),
-        priority = maps:get(<<"priority">>, Map, undefined),
-        scheduled_at = maps:get(<<"scheduled_at">>, Map, undefined)
-    }};
+from_map(Map) when is_map(Map) ->
+    from_map_(hecate_om_wire:field(<<"corpus_id">>, Map), Map);
 from_map(_) ->
     {error, missing_aggregate_id}.
+
+from_map_(undefined, _Map) ->
+    {error, missing_aggregate_id};
+from_map_(Id, Map) ->
+    {ok, #schedule_reembed_v1{
+        corpus_id = Id,
+        source_path = hecate_om_wire:field(<<"source_path">>, Map),
+        priority = hecate_om_wire:field(<<"priority">>, Map),
+        scheduled_at = hecate_om_wire:field(<<"scheduled_at">>, Map)
+    }}.
 
 %% `source_path' is load-bearing for `maybe_schedule_reembed' -- it's
 %% how the target document gets found (this command carries no
