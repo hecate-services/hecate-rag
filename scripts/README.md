@@ -10,6 +10,7 @@ repo root.
 | `sync-checkouts.sh` | Materialise `_checkouts/` symlinks into `_checkouts_resolved/` so the container `COPY` can pick them up |
 | `seed-corpus.sh` | `curl -X POST /api/rag/seed` against a running instance |
 | `search.sh` | `curl -X POST /api/rag/chunks/search` against a running instance |
+| `search-mesh.sh` | Same query against the LIVE fleet over the mesh, printing each hit's own content -- the part that was empty on every hit before 0.1.20 |
 | `smoke-seed-and-query.escript` | Pipe into `rebar3 shell` to drive a full end-to-end seed + 4 queries + HTTP probe without a container |
 | `scaffold-slices.py` | (pre-existing) generates vertical-slice stubs from a config |
 
