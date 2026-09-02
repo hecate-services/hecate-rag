@@ -9,6 +9,27 @@ on:
   push:
     branches: [main]
     tags:     ['v*']
+    # Prose can never change the image: the Containerfile copies
+    # rebar.config, src, apps, config, native and scripts, and nothing
+    # else. Without this, a push touching only a guide rebuilt :latest
+    # and watchtower rolled beam03 for it -- which happened on
+    # 2026-09-02, restarting the service in the middle of a full corpus
+    # re-ingest.
+    #
+    # `scripts/**` is deliberately NOT ignored here, unlike the general
+    # advice for these repos: this image really is built out of that
+    # directory (`RUN bash scripts/build-corpus-sync-nif.sh`, and the
+    # whole directory is COPYed), so a change there legitimately
+    # invalidates it.
+    #
+    # Safe for releases: GitHub does not evaluate path filters for
+    # pushes of tags, so a `v*` tag always builds even when its commit
+    # touched nothing but the CHANGELOG.
+    paths-ignore:
+      - '**.md'
+      - 'guides/**'
+      - 'plans/**'
+      - 'LICENSE'
 
 # A tag push and a main push are two different intents (a versioned,
 # pinned rollback image vs. "what watchtower should be tracking right
