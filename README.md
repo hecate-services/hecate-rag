@@ -37,7 +37,8 @@ Advertised onto the mesh bloom-channel and discoverable by name:
 | `hecate-rag.ingest_document` | Store a document's raw bytes as a source record (no embedding) |
 | `hecate-rag.embed_document` | Chunk + embed an already-ingested doc |
 | `hecate-rag.classify_topics` | Classify a document's chunks into topic labels (LLM-backed, optional) |
-| `hecate-rag.prune_chunks` | Remove a document's chunks from the index |
+| `hecate-rag.prune_chunks` | Remove a document's chunks from the index (the source record stays, for a re-embed) |
+| `hecate-rag.retire_document` | Remove a document for good: its chunks and its source record |
 | `hecate-rag.answer_query` | Top-k retrieval against the index |
 | `hecate-rag.rerank_results` | Rerank a set of hits (semantic + lexical blend) against a query |
 | `hecate-rag.search_chunks_semantic` | Semantic search (text or vector query, optional topic filter) |
@@ -60,7 +61,7 @@ and federation wiring.
 | App | Department | Purpose |
 |-----|-----------|---------|
 | `rag` | shared | `rag_store`, `rag_embedder`, `rag_chunk_embedder`, `rag_embed_hecate_embedder` |
-| `embed_corpus` | CMD | upload_knowledge, add_knowledge, ingest_document, embed_document, classify_topics, seed_corpus, prune_chunks |
+| `embed_corpus` | CMD | upload_knowledge, add_knowledge, ingest_document, embed_document, classify_topics, seed_corpus, prune_chunks, retire_document |
 | `refresh_corpus` | CMD | detect_corpus_change, schedule_reembed |
 | `serve_retrieval` | CMD | answer_query, rerank_results |
 | `query_chunks` | QRY | get_chunk_by_id, list_chunks_by_source, search_chunks_semantic |

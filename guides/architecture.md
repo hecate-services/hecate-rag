@@ -94,6 +94,54 @@ session and pushes it directly. Handles short text (< 80 bytes) that the
 chunker would skip by creating a single chunk directly. Optional `topics`
 field tags each chunk after storing.
 
+### embed_document, seed_corpus and the corpus git loop
+
+The other three writers take the same road. `embed_document` re-reads the
+bytes `ingest_document` stored on the source record, chunks them and calls
+`rag_chunk_embedder:embed_and_store/1`; `seed_corpus` does the same per
+file of a directory; `refresh_corpus_scheduler` (the git loop) upserts the
+source record for every changed file and then calls `embed_document`.
+
+```
+refresh_corpus_scheduler (every 2 min, per configured repo, per changed file)
+  │
+  ├── rag_store:upsert_source(#{document_id, source_path, raw_bytes})
+  │
+  └── maybe_embed_document:embed(#{document_id})
+        │
+        ├── rag_store:get_source_content(DocId)      ← the bytes just stored
+        ├── markdown_chunker:chunk_text(Bytes, Path)
+        └── rag_chunk_embedder:embed_and_store(Chunks)  ← content + vector, one put each
+```
+
+Until 0.1.20 these three wrote through `rag_store:put_chunk/3`, which stores
+content and metadata and no vector. With `fields => []` barrel never fills
+that gap, so everything the git loop ingested was fetchable verbatim and
+invisible to semantic search. `put_chunk/3` is not an ingestion path; it
+survives only for metadata-only test fixtures.
+
+Two consequences of "the caller owns the vector":
+
+- barrel keeps no text for a vector it did not embed itself, so a search
+  hit's `text` is empty. `rag_store` reads the hit's content back from the
+  document store under the same id before returning it.
+- A store written by an older release has chunks without vectors. The
+  scheduler's watermark hash is salted with an index generation
+  (`?INDEX_GENERATION` in `refresh_corpus_scheduler`); bumping it makes
+  every file re-ingest exactly once on the next tick. A refresh that fails
+  resets the file's watermark, so the next tick retries it instead of
+  waiting for the file to change.
+
+## Mesh replies are text-tagged at the boundary
+
+A bare binary in a reply encodes as a CBOR byte string, which macula-cli,
+macula-mcp and every non-BEAM SDK render as `0x...` hex. Every capability's
+ok reply is walked once in `hecate_rag_mesh_rpc` and each binary becomes
+`{text, Bin}`. The desks themselves keep returning bare binaries, because
+the same desks serve HTTP through their `*_api` modules, where jsx wants
+them that way. `get_document_verbatim` is the one desk that shapes itself:
+its `raw_bytes` are bytes and stay bytes.
+
 ## Topic classification
 
 Optional LLM-backed enrichment (NVIDIA NIM, OpenAI-compatible, free tier).

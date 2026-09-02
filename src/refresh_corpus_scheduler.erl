@@ -33,13 +33,25 @@
 %%% `"<repo-id>/<relative-path>"', e.g. `"hecate-corpus/roles/devops.md"'.
 %%%
 %%% Deliberately immediate, not a separately-scheduled async drain: a
-%%% markdown-sized re-ingest is cheap (barrel embeds synchronously in
-%%% its own record-mode policy, same as every other write path here),
+%%% markdown-sized re-ingest is cheap (a handful of embedder calls per
+%%% file, made in this process by `rag_chunk_embedder' underneath
+%%% `maybe_embed_document', then one vector-carrying write per chunk),
 %%% so there is no real workload here that needs decoupling detection
 %%% from processing across a durable backlog. If that changes, a
 %%% consumer reading `type = reembed_request' records back out of
 %%% `rag_store' is a natural, separate addition -- not built ahead of
 %%% actually needing it.
+%%%
+%%% A refresh that fails (embedder unreachable, store error) does not
+%%% stay failed until the file next changes: `detect_corpus_change' has
+%%% already recorded the file's new hash by then, so this module resets
+%%% that watermark to `?RETRY_WATERMARK' and the next tick sees the
+%%% file as changed again.
+%%%
+%%% `?INDEX_GENERATION' salts every hash. Bump it when what a refresh
+%%% WRITES changes shape (2026-09-02: chunks gained their vector), so
+%%% every file re-ingests exactly once on the next tick and a store
+%%% built by the old code catches up without anyone touching the corpus.
 %%%
 %%% Lives here (service-level infrastructure, per `hecate_rag_sup''s
 %%% own module doc), not inside `refresh_corpus' despite otherwise
@@ -59,6 +71,8 @@
 
 -define(POLL_INTERVAL_MS, 120000).
 -define(GLOB, "**/*.md").
+-define(INDEX_GENERATION, <<"vectors-v1:">>).
+-define(RETRY_WATERMARK, <<"retry">>).
 
 -spec start_link() -> {ok, pid()}.
 start_link() ->
@@ -157,27 +171,40 @@ refresh_changed(RepoId, DocId, Content) ->
     %% refresh_file below ingests it regardless.
     _ = maybe_schedule_reembed:schedule(#{<<"corpus_id">> => RepoId,
                                            <<"source_path">> => DocId}),
-    refresh_file(DocId, Content).
+    refresh_file(RepoId, DocId, Content).
 
-refresh_file(DocId, Content) ->
+refresh_file(RepoId, DocId, Content) ->
     Source = #{
         document_id => DocId, source_path => DocId,
         source_type => <<"markdown">>, raw_bytes => Content
     },
-    source_refreshed(rag_store:upsert_source(Source), DocId).
+    source_refreshed(rag_store:upsert_source(Source), RepoId, DocId).
 
-source_refreshed(ok, DocId) ->
-    embed_refreshed(maybe_embed_document:embed(#{<<"document_id">> => DocId}), DocId);
-source_refreshed({error, Reason}, DocId) ->
-    logger:warning("[refresh_corpus_scheduler] source store error path=~ts ~p", [DocId, Reason]).
+source_refreshed(ok, RepoId, DocId) ->
+    embed_refreshed(maybe_embed_document:embed(#{<<"document_id">> => DocId}), RepoId, DocId);
+source_refreshed({error, Reason}, RepoId, DocId) ->
+    logger:warning("[refresh_corpus_scheduler] source store error path=~ts ~p", [DocId, Reason]),
+    retry_next_tick(RepoId, DocId).
 
-embed_refreshed({ok, _}, _DocId) ->
+embed_refreshed({ok, _}, _RepoId, _DocId) ->
     ok;
-embed_refreshed({error, Reason}, DocId) ->
-    logger:warning("[refresh_corpus_scheduler] embed error path=~ts ~p", [DocId, Reason]).
+embed_refreshed({error, Reason}, RepoId, DocId) ->
+    logger:warning("[refresh_corpus_scheduler] embed error path=~ts ~p", [DocId, Reason]),
+    retry_next_tick(RepoId, DocId).
+
+%% detect_corpus_change already wrote the file's real hash as its
+%% watermark before this refresh ran; overwrite it with a value no real
+%% hash equals, so the next tick sees the file as changed and retries.
+retry_next_tick(RepoId, DocId) ->
+    retry_marked(rag_store:put_watermark(RepoId, DocId, ?RETRY_WATERMARK), DocId).
+
+retry_marked(ok, _DocId) ->
+    ok;
+retry_marked({error, Reason}, DocId) ->
+    logger:warning("[refresh_corpus_scheduler] retry watermark error path=~ts ~p", [DocId, Reason]).
 
 namespaced_id(RepoId, RelPath) ->
     <<RepoId/binary, "/", RelPath/binary>>.
 
 diff_hash(Content) ->
-    binary:encode_hex(crypto:hash(sha256, Content)).
+    binary:encode_hex(crypto:hash(sha256, [?INDEX_GENERATION, Content])).

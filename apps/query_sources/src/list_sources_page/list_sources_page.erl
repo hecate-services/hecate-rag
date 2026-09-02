@@ -40,5 +40,10 @@ to_non_neg_int(Bin, Default) ->
         _                             -> Default
     end.
 
-to_int(Bin) ->
-    try binary_to_integer(Bin) catch _:_ -> undefined end.
+%% A mesh caller's `limit'/`offset' arrive as CBOR integers, an HTTP
+%% caller's as JSON numbers -- integers either way; only a query-string
+%% style caller sends digits as text. Found live (2026-09-02): every
+%% `limit' from macula-cli was silently the default 50.
+to_int(N) when is_integer(N)   -> N;
+to_int(Bin) when is_binary(Bin) -> try binary_to_integer(Bin) catch _:_ -> undefined end;
+to_int(_)                       -> undefined.

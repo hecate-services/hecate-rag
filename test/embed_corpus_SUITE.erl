@@ -14,14 +14,15 @@
 -export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([ingest_embed_search_prune_round_trip/1, sources_query_round_trip/1,
          embed_without_ingest_errors/1, seed_corpus_creates_verbatim_source/1,
-         get_document_verbatim_round_trip/1,
+         get_document_verbatim_round_trip/1, retire_document_round_trip/1,
          refresh_scheduler_detects_and_refreshes_change/1,
          refresh_scheduler_namespaces_by_repo_to_avoid_collisions/1]).
 
 all() ->
     [ingest_embed_search_prune_round_trip, sources_query_round_trip,
      embed_without_ingest_errors, seed_corpus_creates_verbatim_source,
-     get_document_verbatim_round_trip, refresh_scheduler_detects_and_refreshes_change,
+     get_document_verbatim_round_trip, retire_document_round_trip,
+     refresh_scheduler_detects_and_refreshes_change,
      refresh_scheduler_namespaces_by_repo_to_avoid_collisions].
 
 init_per_suite(Config) ->
@@ -43,12 +44,19 @@ ingest_embed_search_prune_round_trip(_Config) ->
     {ok, #{chunks := N}} = embed(DocId),
     ?assert(N > 0),
 
-    %% Real embedding call (barrel's own Ollama provider), real search —
-    %% this is the pipeline that used to be entirely dead. `mode => sync'
-    %% on the embedding policy means the write is searchable the instant
-    %% put_chunk returns, no polling needed.
+    %% Real embedding call (rag_embedder -> Ollama in test config, made
+    %% in maybe_embed_document's own process), real search -- the
+    %% pipeline that has been silently dead twice: first when nothing
+    %% embedded at all, then (live, 2026-09-02) when embed_document
+    %% wrote chunks without a vector. barrel indexes a client-supplied
+    %% vector synchronously, so the write is searchable the instant
+    %% put_chunk_with_vector returns, no polling needed. The hit must
+    %% also carry the chunk's content: barrel keeps no text for vectors
+    %% it did not embed itself, so rag_store reads it back from the doc.
     {ok, Hits} = rag_store:search_text(<<"Where do quokkas live?">>, 5),
     ?assert(hit_from_source(Hits, SourcePath)),
+    ?assertMatch([#{content := <<_, _/binary>>} | _],
+                 [H || #{source_path := SP} = H <- Hits, SP =:= SourcePath]),
 
     {ok, _} = prune(DocId),
     {ok, GoneHits} = rag_store:search_text(<<"Where do quokkas live?">>, 5),
@@ -111,6 +119,30 @@ get_document_verbatim_round_trip(_Config) ->
     ?assertEqual({error, not_found},
                  get_document_verbatim:handle(<<"no-such-path.md">>)).
 
+%% retire_document is prune_chunks plus the source record: afterwards the
+%% document is unknown everywhere, not merely unsearchable -- and a second
+%% retire of the same id is the same not_ingested any unknown id gets.
+retire_document_round_trip(_Config) ->
+    DocId = fresh_id(),
+    SourcePath = <<"numbat-", DocId/binary, ".md">>,
+    %% Long enough for markdown_chunker not to skip it as a stub section.
+    Content = <<"# The Numbat\n\nNumbats are small marsupials that eat "
+                "termites almost exclusively, up to twenty thousand a day, "
+                "and live in the eucalypt woodlands of Western Australia.\n">>,
+    {ok, _} = ingest(DocId, SourcePath, Content),
+    {ok, #{chunks := N}} = embed(DocId),
+    ?assert(N > 0),
+
+    ?assertEqual({ok, #{document_id => DocId, pruned => N}},
+                 maybe_retire_document:retire(#{<<"document_id">> => DocId})),
+    ?assertEqual({error, not_found}, rag_store:get_source(DocId)),
+    ?assertEqual({error, not_found}, rag_store:find_source_by_path(SourcePath)),
+    ?assertEqual({error, not_found}, get_document_verbatim:handle(SourcePath)),
+    {ok, Hits} = rag_store:search_text(<<"What do numbats eat?">>, 5),
+    ?assertNot(hit_from_source(Hits, SourcePath)),
+    ?assertEqual({error, not_ingested},
+                 maybe_retire_document:retire(#{<<"document_id">> => DocId})).
+
 %% refresh_corpus_scheduler:scan/0 is the internal half of the freshness
 %% loop (the external half -- keeping each checkout in sync with git --
 %% is corpus_git_sync's own job, not exercised here). Points
@@ -135,11 +167,17 @@ refresh_scheduler_detects_and_refreshes_change(Config) ->
     ok = application:set_env(hecate_rag, data_dir, DataDir),
 
     AbsPath = filename:join(RepoDir, RelPath),
-    Original = <<"# Before\n\nOriginal content.\n">>,
+    Original = <<"# Before\n\nThe okapi, a forest giraffe, lives only in the "
+                 "Ituri rainforest of Congo.\n">>,
     ok = file:write_file(AbsPath, Original),
     ok = refresh_corpus_scheduler:scan(),
     ?assertEqual({ok, #{source_path => NamespacedId, raw_bytes => Original}},
                  rag_store:get_source_content(NamespacedId)),
+    %% Verbatim is not enough: the scheduler's refresh must also make the
+    %% file a semantic hit (live, 2026-09-02: every git-synced file was
+    %% fetchable and unsearchable, because this path wrote no vectors).
+    {ok, Hits} = rag_store:search_text(<<"Where does the okapi live?">>, 5),
+    ?assert(hit_from_source(Hits, NamespacedId)),
 
     %% Unchanged content -- a second scan is a no-op, same content still there.
     ok = refresh_corpus_scheduler:scan(),

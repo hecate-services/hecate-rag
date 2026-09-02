@@ -33,7 +33,11 @@ ingest_embed_search_answer_prune_over_mesh_rpc(_Config) ->
     Content = <<"# The Capybara\n\nCapybaras are the largest living "
                 "rodents, native to South America.\n">>,
 
-    {ok, #{document_id := DocId}} =
+    %% Every reply through dispatch/2 is the MESH shape: each string in
+    %% it is `{text, Bin}'-tagged at the boundary (hecate_rag_mesh_rpc's
+    %% own moduledoc says why) -- so a bare-binary match here would be
+    %% asserting the HTTP shape against the mesh route.
+    {ok, #{document_id := {text, DocId}}} =
         hecate_rag_mesh_rpc:dispatch(<<"hecate-rag.ingest_document">>, #{
             <<"document_id">> => DocId, <<"source_path">> => SourcePath,
             <<"source_type">> => <<"text/markdown">>, <<"raw_bytes">> => Content
@@ -48,6 +52,9 @@ ingest_embed_search_answer_prune_over_mesh_rpc(_Config) ->
                                                #{<<"query_text">> => <<"largest rodent">>,
                                                  <<"top_k">> => 5}),
     ?assert(hit_from_source(Hits, SourcePath)),
+    %% ...and a hit's content reaches the wire as tagged, non-empty text.
+    ?assertMatch([#{content := {text, <<_, _/binary>>}} | _],
+                 [H || #{source_path := SP} = H <- Hits, SP =:= {text, SourcePath}]),
 
     {ok, #{hits := AnswerHits}} =
         hecate_rag_mesh_rpc:dispatch(<<"hecate-rag.answer_query">>,
@@ -67,8 +74,9 @@ unknown_method_is_rejected(_Config) ->
 
 %%% Internals
 
+%% Mesh shape: `source_path' arrives `{text, _}'-tagged (see the test above).
 hit_from_source(Hits, SourcePath) ->
-    lists:any(fun(#{source_path := SP}) -> SP =:= SourcePath end, Hits).
+    lists:any(fun(#{source_path := SP}) -> SP =:= {text, SourcePath} end, Hits).
 
 fresh_id() ->
     integer_to_binary(erlang:unique_integer([positive, monotonic])).

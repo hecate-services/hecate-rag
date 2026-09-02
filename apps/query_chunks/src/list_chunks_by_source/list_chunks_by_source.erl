@@ -29,8 +29,10 @@ limit(Params) ->
         L         -> min(to_pos_int(L), ?MAX_LIMIT)
     end.
 
-to_pos_int(Bin) ->
-    case (catch binary_to_integer(Bin)) of
-        N when is_integer(N), N > 0 -> N;
-        _                            -> ?DEFAULT_LIMIT
-    end.
+%% Same as list_sources_page's: an integer on the wire (CBOR from the
+%% mesh, a JSON number over HTTP) is already an integer; only text needs
+%% parsing. Found live (2026-09-02): every `limit' from macula-cli was
+%% silently the default.
+to_pos_int(N) when is_integer(N), N > 0 -> N;
+to_pos_int(Bin) when is_binary(Bin)     -> to_pos_int(catch binary_to_integer(Bin));
+to_pos_int(_)                           -> ?DEFAULT_LIMIT.

@@ -2,14 +2,20 @@
 %%% `ingest_document' recorded against this document (read back from
 %%% `rag_store', not from the command — `embed_document' carries no raw
 %%% content of its own, so a document can be re-embedded without
-%%% resubmitting it) and writes each chunk to `rag_store'. Embedding
-%%% happens automatically: `rag_store' opens its database in barrel
-%%% "record mode", so `put_chunk/3' embeds `content' per the configured
-%%% policy — there is no separate embed call to make here.
+%%% resubmitting it), embeds every chunk in THIS process via
+%%% `rag_chunk_embedder' (`rag_embedder' underneath: Ollama locally,
+%%% hecate-embedder over the mesh on the fleet) and writes content +
+%%% vector to `rag_store' in one put. `rag_store''s barrel policy has
+%%% `fields => []': barrel never embeds anything itself, so a chunk
+%%% written without a vector is stored but never a search hit. That is
+%%% exactly what this desk did until 2026-09-02 (found live: every
+%%% git-synced corpus file was fetchable verbatim and invisible to
+%%% semantic search).
 %%%
 %%% Same header-aware chunker `seed_corpus' uses (`markdown_chunker'). This
 %%% is the audit-worthy, per-document path; `seed_corpus' is the
-%%% deliberate bulk bypass. Both land in the same `rag_store'.
+%%% deliberate bulk bypass. Both land in the same `rag_store' through the
+%%% same `rag_chunk_embedder' call.
 -module(maybe_embed_document).
 
 -export([embed/1]).
@@ -42,28 +48,18 @@ do_embed(Cmd) ->
 chunk_and_store(Id, #{source_path := SourcePath, raw_bytes := RawBytes}) ->
     Path = source_path_or_id(SourcePath, Id),
     Chunks = markdown_chunker:chunk_text(RawBytes, Path, ?MAX_CHUNK_CHARS),
-    case put_all(Chunks) of
-        ok             -> {ok, #{document_id => Id, chunks => length(Chunks)}};
-        {error, _} = E -> E
-    end.
+    stored(Id, rag_chunk_embedder:embed_and_store(Chunks)).
 
-%% First error stops the batch; chunks already written stay written (each
-%% `put_chunk' is its own atomic barrel write, there is no larger
-%% transaction to roll back, and a partial embed is safe to retry — every
-%% chunk id is content-derived, so re-running just re-writes the same ids).
-put_all(Chunks) ->
-    put_all(Chunks, ok).
-
-put_all([], Result) ->
-    Result;
-put_all(_Chunks, {error, _} = E) ->
-    E;
-put_all([Chunk | Rest], ok) ->
-    put_all(Rest, put_one(Chunk)).
-
-put_one(#{chunk_id := ChunkId, content := Content} = Chunk) ->
-    Meta = maps:without([chunk_id, content], Chunk),
-    rag_store:put_chunk(ChunkId, Content, Meta).
+%% Any failed chunk fails the document. Chunks already written stay
+%% written (each put is its own atomic barrel write, there is no larger
+%% transaction to roll back) and a retry is safe -- every chunk id is
+%% position-derived, so re-running re-writes the same ids. Reporting
+%% the failure is what makes that retry happen: refresh_corpus_scheduler
+%% resets the file's watermark on it.
+stored(Id, {Stored, []}) ->
+    {ok, #{document_id => Id, chunks => Stored}};
+stored(_Id, {_Stored, Errors}) ->
+    {error, {embed_failed, Errors}}.
 
 %% `markdown_chunker' only uses this to stamp `source_path' on each chunk;
 %% fall back to the document id so a document ingested without one still

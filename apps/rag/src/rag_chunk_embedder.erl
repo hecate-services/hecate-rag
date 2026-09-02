@@ -13,22 +13,16 @@
 %%% spawned process if you don't want to block the caller.
 -module(rag_chunk_embedder).
 
--export([embed_and_store/1, embed_and_store/2]).
-
--define(DEFAULT_MAX_CHARS, 2000).
+-export([embed_and_store/1]).
 
 %% @doc Embed and store a list of chunks. Each chunk is a map with at
 %% least `content' (binary) and `chunk_id' (binary); other keys become
-%% metadata. Returns `{ok, Count, Errors}' where Count is the number
-%% successfully stored and Errors is a list of `{ChunkId, Reason}'.
--spec embed_and_store([map()]) -> {ok, non_neg_integer(), [{binary(), term()}]}.
+%% metadata. Returns `{Stored, Errors}': how many chunks were written
+%% with their vector, and one `{ChunkId, Reason}' per chunk that was
+%% not (embedder failure or store failure). Chunks are independent: one
+%% failure never stops the rest.
+-spec embed_and_store([map()]) -> {non_neg_integer(), [{binary(), term()}]}.
 embed_and_store(Chunks) when is_list(Chunks) ->
-    embed_and_store(Chunks, #{}).
-
-%% @doc As `embed_and_store/1' with options. Currently no options are
-%% defined; reserved for future batch-embedding mode.
--spec embed_and_store([map()], map()) -> {ok, non_neg_integer(), [{binary(), term()}]}.
-embed_and_store(Chunks, _Opts) when is_list(Chunks) ->
     lists:foldl(fun embed_one/2, {0, []}, Chunks).
 
 embed_one(#{chunk_id := ChunkId, content := Content} = Chunk, {Ok, Err}) ->

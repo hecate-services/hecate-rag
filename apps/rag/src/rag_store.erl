@@ -19,11 +19,13 @@
 %%%
 %%%   - `put_chunk_with_vector/4' — primary write path: content + meta
 %%%     + pre-computed vector. Barrel indexes the vector synchronously.
-%%%   - `put_chunk/3' — content + meta only, NO vector. Stored but not
-%%%     in the vector index until a vector is added via `tag_chunk/2'
-%%%     or a re-embed. Kept for backward compat.
+%%%   - `put_chunk/3' — content + meta only, NO vector. Never a search
+%%%     hit until `put_chunk_with_vector/4' writes the same id with a
+%%%     vector. Not an ingestion path: every ingestion desk embeds via
+%%%     `rag_chunk_embedder'. Used by metadata-only test fixtures.
 %%%   - `forget_chunk/1' — called directly by `prune_chunks'.
 %%%   - `upsert_source/1' — called directly by `ingest_document'.
+%%%   - `forget_source/1' — called directly by `retire_document'.
 %%%
 %%% Read paths:
 %%%
@@ -51,6 +53,7 @@
     get/1,
     size/0,
     upsert_source/1,
+    forget_source/1,
     get_source/1,
     get_source_content/1,
     list_sources/2,
@@ -70,19 +73,20 @@
 -define(REEMBED_ID_PREFIX, "reembed:").
 
 %% The default gen_server:call/2 timeout (5000ms) is too short for this
-%% store under real load: barrel's own record-mode embedding policy
-%% runs a real mesh round-trip to the configured embedder INSIDE
-%% put_chunk/3's handle_call clause, so a burst of writes (e.g.
-%% refresh_corpus_scheduler's first-ever pass over a whole unwatermarked
-%% corpus) serializes through this one gen_server, and an unrelated
-%% call queued behind them -- even a cheap read like get_watermark/2 --
-%% times out waiting its turn, not because anything is actually stuck.
-%% Verified live: refresh_corpus_scheduler crash-looped indefinitely on
-%% beam03 with {timeout, {gen_server, call, [rag_store, {get_watermark, ...}]}}
-%% on its very first tick against the real corpus, every 5 seconds,
-%% never completing a pass. 60s comfortably covers a real embedding
-%% backlog while still surfacing a genuine hang eventually, rather than
-%% waiting forever.
+%% store under real load: refresh_corpus_scheduler's first-ever pass
+%% over a whole unwatermarked corpus serializes hundreds of
+%% put_chunk_with_vector writes (each a barrel docdb write PLUS a
+%% synchronous HNSW insert) through this one gen_server, and an
+%% unrelated call queued behind them -- even a cheap read like
+%% get_watermark/2 -- times out waiting its turn, not because anything
+%% is actually stuck. Verified live, back when the embedder round-trip
+%% itself still ran inside handle_call: refresh_corpus_scheduler
+%% crash-looped indefinitely on beam03 with {timeout, {gen_server, call,
+%% [rag_store, {get_watermark, ...}]}} on its very first tick, every 5
+%% seconds, never completing a pass. Embedding has since moved out to
+%% the caller (rag_chunk_embedder), but the write burst remains. 60s
+%% comfortably covers it while still surfacing a genuine hang
+%% eventually, rather than waiting forever.
 -define(CALL_TIMEOUT, 60000).
 
 -record(state, {db = undefined :: map() | undefined}).
@@ -93,9 +97,12 @@ start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 %% @doc Insert or replace a chunk WITHOUT a vector. The chunk is stored
-%% but NOT in the vector index — it won't be found by semantic search
-%% until a vector is added (via `put_chunk_with_vector/4' or a re-embed).
-%% Kept for backward compat; new code should use `put_chunk_with_vector/4'.
+%% but NOT in the vector index -- semantic search never returns it until
+%% `put_chunk_with_vector/4' writes the same id with a vector. Not an
+%% ingestion path: those all go through `rag_chunk_embedder', and two of
+%% them calling this instead was the 2026-09-02 live bug (every
+%% git-synced corpus file fetchable verbatim, none of them searchable).
+%% Used by metadata-only test fixtures such as the `classify_topics' suite.
 -spec put_chunk(binary(), binary(), map()) -> ok | {error, term()}.
 put_chunk(ChunkId, Content, Meta)
   when is_binary(ChunkId), is_binary(Content), is_map(Meta) ->
@@ -156,6 +163,14 @@ size() ->
 -spec upsert_source(map()) -> ok | {error, term()}.
 upsert_source(#{document_id := Id} = Source) when is_binary(Id) ->
     gen_server:call(?MODULE, {upsert_source, Source}, ?CALL_TIMEOUT).
+
+%% @doc Remove a document's source record: afterwards the document is
+%% unknown to `get_source/1', `get_source_content/1', `list_sources/2'
+%% and `find_source_by_path/1'. Chunks are not touched here --
+%% `retire_document' prunes them first, through `prune_chunks'.
+-spec forget_source(binary()) -> ok | {error, term()}.
+forget_source(DocumentId) when is_binary(DocumentId) ->
+    gen_server:call(?MODULE, {forget_source, DocumentId}, ?CALL_TIMEOUT).
 
 %% @doc The public source row: id/path/type, no `raw_bytes' (kept out of
 %% the default shape the same way `chunk_meta/1' hides `_embedding' —
@@ -231,7 +246,7 @@ handle_call({tag_chunk, ChunkId, Topics}, _From, S0) ->
     with_db(S0, fun(Db) -> tag_chunk_doc(Db, ChunkId, Topics) end);
 
 handle_call({search_vector, Vector, TopK}, _From, S0) ->
-    with_db(S0, fun(Db) -> to_hits(barrel:search_vector(Db, Vector, #{k => TopK})) end);
+    with_db(S0, fun(Db) -> to_hits(Db, barrel:search_vector(Db, Vector, #{k => TopK})) end);
 
 handle_call({get, Id}, _From, S0) ->
     with_db(S0, fun(Db) -> chunk_from_doc(barrel:get_doc(Db, Id)) end);
@@ -241,6 +256,9 @@ handle_call(size, _From, S0) ->
 
 handle_call({upsert_source, Source}, _From, S0) ->
     with_db(S0, fun(Db) -> put_source_doc(Db, Source) end);
+
+handle_call({forget_source, Id}, _From, S0) ->
+    with_db(S0, fun(Db) -> normalize_write(barrel:delete_doc(Db, source_id(Id))) end);
 
 handle_call({get_source, Id}, _From, S0) ->
     with_db(S0, fun(Db) -> source_from_doc(barrel:get_doc(Db, source_id(Id))) end);
@@ -404,18 +422,38 @@ put_doc_with_current_rev(Db, Id, Doc) ->
         {error, _} = E             -> E
     end.
 
-%% Merge `Topics' into an existing chunk document's metadata. Reads
-%% the current doc (for its _rev), adds `<<"topics">>`, writes back.
-%% Does NOT touch `<<"content">>` or `<<"_embedding">>` — barrel's
-%% embedding policy only triggers on content changes, so this metadata-
-%% only update does not re-embed.
+%% Merge `Topics' into an existing chunk document's metadata: read the
+%% current doc (for its `_rev'), add `<<"topics">>', write back --
+%% carrying the chunk's stored vector explicitly.
+%%
+%% barrel does NOT return `<<"_embedding">>' on a read: the vector lives
+%% in its own column and the read-back body has no trace of it. A doc
+%% re-put without one, under a policy with `fields => []', matches no
+%% embedding rule, so barrel DEINDEXES it -- the chunk stays in the
+%% document store and silently leaves the vector index. Verified against
+%% barrel directly (2026-09-02): put with a vector, search finds it,
+%% get_doc + put_doc of that same body, search finds nothing. So the
+%% vector is read back separately (`barrel:vector_get/2') and put on the
+%% doc, which restores the index entry and refreshes its metadata.
+%%
+%% Live effect while this was broken: `classify_topics' and
+%% `add_knowledge''s `topics' both silently removed every chunk they
+%% tagged from semantic search.
 tag_chunk_doc(Db, ChunkId, Topics) ->
-    case barrel:get_doc(Db, ChunkId) of
-        {ok, Doc} ->
-            Updated = Doc#{<<"topics">> => Topics},
-            normalize_write(put_doc_upsert(Db, ChunkId, Updated));
-        {error, _} = E ->
-            E
+    tag_chunk_doc(Db, ChunkId, Topics, barrel:get_doc(Db, ChunkId)).
+
+tag_chunk_doc(Db, ChunkId, Topics, {ok, Doc}) ->
+    Updated = with_stored_vector(Db, ChunkId, Doc#{<<"topics">> => Topics}),
+    normalize_write(put_doc_upsert(Db, ChunkId, Updated));
+tag_chunk_doc(_Db, _ChunkId, _Topics, {error, _} = E) ->
+    E.
+
+%% A chunk with no vector entry (written by `put_chunk/3') has nothing
+%% to preserve -- it was never in the index and stays out of it.
+with_stored_vector(Db, ChunkId, Doc) ->
+    case barrel:vector_get(Db, ChunkId) of
+        {ok, #{vector := Vector}} when is_list(Vector) -> Doc#{<<"_embedding">> => Vector};
+        _NoVector                                      -> Doc
     end.
 
 json_shape(Map) ->
@@ -445,15 +483,33 @@ chunk_count(Db) ->
         _                   -> 0
     end.
 
-to_hits({ok, RawHits}) ->
-    {ok, [hit(H) || H <- RawHits]};
-to_hits({error, _} = E) ->
+to_hits(Db, {ok, RawHits}) ->
+    {ok, [hit(Db, H) || H <- RawHits]};
+to_hits(_Db, {error, _} = E) ->
     E.
 
-hit(#{key := Id, score := Score, text := Text, metadata := Meta}) ->
-    #{chunk_id => Id, content => Text, score => Score,
+%% barrel's vector store only carries text for vectors IT embedded.
+%% Every vector here is client-supplied (`_embedding', see
+%% put_chunk_with_vector_doc/5) under a policy with `fields => []', so
+%% a hit's `text' is empty or absent -- the chunk's content lives on
+%% the docdb side under the same id, and that is where a hit reads it
+%% from. Found live (2026-09-02): every search hit reached macula-cli
+%% with an empty `content'.
+hit(Db, #{key := Id, score := Score} = Raw) ->
+    Meta = maps:get(metadata, Raw, #{}),
+    #{chunk_id    => Id,
+      content     => hit_content(Db, Id, maps:get(text, Raw, <<>>)),
+      score       => Score,
       source_path => maps:get(<<"source_path">>, Meta, <<>>),
-      meta => maps:without([<<"source_path">>], Meta)}.
+      meta        => maps:without([<<"source_path">>], Meta)}.
+
+hit_content(_Db, _Id, Text) when byte_size(Text) > 0 ->
+    Text;
+hit_content(Db, Id, _Empty) ->
+    stored_content(barrel:get_doc(Db, Id)).
+
+stored_content({ok, #{<<"content">> := Content}}) -> Content;
+stored_content(_NotFound)                          -> <<>>.
 
 %%% Internals — sources
 

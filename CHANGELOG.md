@@ -3,6 +3,68 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.20] - 2026-09-02
+
+### Fixed
+
+- Semantic search never returned anything the corpus git loop or
+  `seed_corpus` had ingested. Both wrote chunks through
+  `rag_store:put_chunk/3`, which stores content and metadata but no
+  vector, while `rag_store`'s barrel policy has `fields => []` and never
+  embeds on its own -- so every git-synced file was fetchable verbatim
+  and invisible to `search_chunks_semantic`/`answer_query`. Live, the
+  only hits were the chunks of a months-old manual seed, and even those
+  came back with an empty `content`. `embed_document` and `seed_corpus`
+  now embed through `rag_chunk_embedder` (the path `upload_knowledge` and
+  `add_knowledge` already used) and write content + vector in one put; a
+  chunk that fails to embed fails the document.
+- Tagging a chunk with topics removed it from the vector index.
+  `classify_topics` and `add_knowledge`'s `topics` field both go through
+  `rag_store:tag_chunk/2`, which read the chunk back and wrote it again
+  with the labels attached -- and barrel does not return a document's
+  `_embedding` on a read, so the re-written document had no vector and
+  barrel deindexed it. Every chunk either capability touched became
+  unsearchable. `tag_chunk/2` now reads the stored vector back
+  separately (`barrel:vector_get/2`) and carries it on the write.
+- Search hits carried an empty `content`. barrel keeps no text for a
+  vector it did not embed itself, so `rag_store` now reads a hit's
+  content back from the document store under the same id.
+- A store built by older releases catches up on its own:
+  `refresh_corpus_scheduler` salts its watermark hash with an index
+  generation, so the first tick of 0.1.20 re-ingests every file once.
+  A refresh that fails (embedder unreachable, store error) now resets
+  the file's watermark so the next tick retries it, instead of staying
+  failed until the file changes.
+- Rebuilt against macula 10.18.0, which runs inbound CALL handlers off
+  the link process: `search_chunks_semantic`'s own embed call over the
+  mesh no longer waits 30 s on the very link that delivered the call.
+  The other half of "semantic search returns nothing" on the fleet.
+- `list_sources_page` and `list_chunks_by_source` ignored an integer
+  `limit`/`offset` (what every mesh and JSON caller sends) and silently
+  used the defaults; only digits-as-text were parsed.
+- Every string in a mesh reply (`list_sources_page` rows, search hit
+  `content`/`source_path`/`chunk_id`, chunk metadata, document ids)
+  reached macula-cli / macula-mcp as `0x...` hex. Ok replies are now
+  `{text, Bin}`-tagged once at the mesh boundary in
+  `hecate_rag_mesh_rpc`; the HTTP handlers are unaffected.
+  `get_document_verbatim` keeps shaping itself (`raw_bytes` stays bytes).
+
+### Added
+
+- `hecate-rag.retire_document` (and `POST /api/rag/documents/retire`):
+  a document leaves the corpus for good -- its chunks (through
+  `prune_chunks`) and its source record. `prune_chunks` keeps the source
+  record on purpose, for a re-embed; until now nothing could remove it.
+  First use: the bare-path duplicates (`README.md` beside
+  `hecate-corpus/README.md`) a pre-namespacing manual seed left in the
+  live store.
+
+### Changed
+
+- `rag_chunk_embedder:embed_and_store/1` documents its real return
+  shape, `{Stored, Errors}` (the spec claimed `{ok, Count, Errors}`);
+  the never-used `/2` variant with its empty options map is gone.
+
 ## [0.1.19] - 2026-09-02
 
 ### Fixed

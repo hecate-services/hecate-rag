@@ -1,7 +1,7 @@
 {
   "name": "hecate-rag",
   "display_name": "RAG",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "description": "Realm-bound RAG service: retrieval over the configured corpora",
   "service_type": "container_daemon",
   "tenancy": "realm",
@@ -22,6 +22,7 @@
     "hecate-rag.add_knowledge",
     "hecate-rag.classify_topics",
     "hecate-rag.prune_chunks",
+    "hecate-rag.retire_document",
     "hecate-rag.answer_query",
     "hecate-rag.rerank_results",
     "hecate-rag.get_chunk_by_id",

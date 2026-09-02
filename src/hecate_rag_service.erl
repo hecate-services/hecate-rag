@@ -40,9 +40,10 @@ health() ->
 %% and — via each entry's `handler' key — actually callable through it
 %% too (`hecate_om_simple_handler' bridges to `hecate_rag_mesh_rpc''s own
 %% one-arity handler functions, so their `route/2' dispatch logic is
-%% unchanged). No capability here sets `auth': all 16 stay open. See
-%% `plans/PLAN_UCAN_GATED_CAPABILITIES.md' for `prune_chunks' and
-%% `schedule_reembed' as gating candidates, not yet decided.
+%% unchanged). No capability here sets `auth': all 17 stay open. See
+%% `plans/PLAN_UCAN_GATED_CAPABILITIES.md' for `prune_chunks',
+%% `retire_document' and `schedule_reembed' as gating candidates, not
+%% yet decided.
 capabilities() ->
     [
         cap(<<"hecate-rag.ingest_document">>,        handle_ingest_document),
@@ -51,6 +52,7 @@ capabilities() ->
         cap(<<"hecate-rag.add_knowledge">>,          handle_add_knowledge),
         cap(<<"hecate-rag.classify_topics">>,        handle_classify_topics),
         cap(<<"hecate-rag.prune_chunks">>,           handle_prune_chunks),
+        cap(<<"hecate-rag.retire_document">>,        handle_retire_document),
         cap(<<"hecate-rag.answer_query">>,           handle_answer_query),
         cap(<<"hecate-rag.rerank_results">>,         handle_rerank_results),
         cap(<<"hecate-rag.get_chunk_by_id">>,        handle_get_chunk_by_id),

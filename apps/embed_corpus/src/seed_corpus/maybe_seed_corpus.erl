@@ -1,9 +1,11 @@
 %%% @doc Handler for `seed_corpus_v1`.
 %%%
 %%% Bulk-loads a directory of markdown into `rag_store'. Walks files,
-%%% header-chunks each, persists via `rag_store:put_chunk/3' — embedding
-%%% happens automatically (barrel record-mode policy), no separate embed
-%%% call to make here. Also persists one verbatim `rag_store:upsert_source/1'
+%%% header-chunks each, embeds every chunk in this process and persists
+%%% content + vector via `rag_chunk_embedder:embed_and_store/1' (barrel
+%%% never embeds on its own here: `rag_store''s policy has `fields => []',
+%%% so a chunk written without a vector is never a search hit). Also
+%%% persists one verbatim `rag_store:upsert_source/1'
 %%% record per file (`document_id'/`source_path' both the file's
 %%% corpus-relative path), matching what `ingest_document'/`upload_knowledge'
 %%% already do per-document — bulk-seeded files are exact-fetchable the
@@ -104,7 +106,8 @@ ingest_file(AbsPath, RootDir, Acc0) ->
     end.
 
 store_chunks_or_skip([], Acc)     -> bump(skipped, Acc);
-store_chunks_or_skip(Chunks, Acc) -> fold_chunks(Chunks, Acc).
+store_chunks_or_skip(Chunks, Acc) ->
+    count_embedded(rag_chunk_embedder:embed_and_store(Chunks), Acc).
 
 %% Verbatim record alongside the chunks above -- same file, read once
 %% more here since markdown_chunker:chunk_file/2 keeps its own read
@@ -130,19 +133,14 @@ source_stored({error, Reason}, RelPath, Acc) ->
     logger:warning("[seed_corpus] source store error path=~ts ~p", [RelPath, Reason]),
     bump(source_errors, Acc).
 
-fold_chunks(Chunks, Acc0) ->
-    lists:foldl(fun(C, Acc) -> store_chunk(C, Acc) end, Acc0, Chunks).
-
-store_chunk(Chunk, Acc) ->
-    #{chunk_id := Id, content := Content} = Chunk,
-    Meta = maps:without([chunk_id, content], Chunk),
-    case rag_store:put_chunk(Id, Content, Meta) of
-        ok ->
-            bump([chunks, embeds], Acc);
-        {error, Reason} ->
-            logger:warning("[seed_corpus] store error chunk=~s ~p", [Id, Reason]),
-            bump([chunks, embed_errors], Acc)
-    end.
+count_embedded({Stored, Errors}, Acc) ->
+    lists:foreach(fun({Id, Reason}) ->
+                      logger:warning("[seed_corpus] embed error chunk=~s ~p", [Id, Reason])
+                  end, Errors),
+    Failed = length(Errors),
+    Acc#{chunks       => maps:get(chunks, Acc) + Stored + Failed,
+         embeds       => maps:get(embeds, Acc) + Stored,
+         embed_errors => maps:get(embed_errors, Acc) + Failed}.
 
 excluded(_File, []) -> false;
 excluded(File, Globs) ->
@@ -155,9 +153,7 @@ match_glob(File, Glob) ->
     string:find(File, Glob) =/= nomatch.
 
 bump(Key, Acc) when is_atom(Key) ->
-    maps:update_with(Key, fun(V) -> V + 1 end, Acc);
-bump(Keys, Acc) when is_list(Keys) ->
-    lists:foldl(fun bump/2, Acc, Keys).
+    maps:update_with(Key, fun(V) -> V + 1 end, Acc).
 
 to_str(undefined)              -> "**/*.md";
 to_str(B) when is_binary(B)    -> binary_to_list(B);
