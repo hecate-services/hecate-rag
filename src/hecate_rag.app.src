@@ -28,6 +28,6 @@
     {modules, []},
     {licenses, ["Apache-2.0"]},
     {links, [
-        {"Codeberg", "https://codeberg.org/hecate-services/hecate-rag"}
+        {"GitHub", "https://github.com/hecate-services/hecate-rag"}
     ]}
 ]}.

@@ -33,4 +33,4 @@ Idempotent. Touches only the slice files; leaves umbrella roots
 
 ## Issues
 
-https://codeberg.org/hecate-services/hecate-rag/issues
+https://github.com/hecate-services/hecate-rag/issues
