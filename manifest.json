@@ -1,7 +1,7 @@
 {
   "name": "hecate-rag",
   "display_name": "RAG",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "description": "Realm-bound RAG service: retrieval over the configured corpora",
   "service_type": "container_daemon",
   "tenancy": "realm",

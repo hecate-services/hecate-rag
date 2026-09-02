@@ -15,6 +15,7 @@
 -export([ingest_embed_search_prune_round_trip/1, sources_query_round_trip/1,
          embed_without_ingest_errors/1, seed_corpus_creates_verbatim_source/1,
          get_document_verbatim_round_trip/1, retire_document_round_trip/1,
+         sources_paging_walks_the_whole_store/1,
          refresh_scheduler_detects_and_refreshes_change/1,
          refresh_scheduler_namespaces_by_repo_to_avoid_collisions/1]).
 
@@ -22,6 +23,7 @@ all() ->
     [ingest_embed_search_prune_round_trip, sources_query_round_trip,
      embed_without_ingest_errors, seed_corpus_creates_verbatim_source,
      get_document_verbatim_round_trip, retire_document_round_trip,
+     sources_paging_walks_the_whole_store,
      refresh_scheduler_detects_and_refreshes_change,
      refresh_scheduler_namespaces_by_repo_to_avoid_collisions].
 
@@ -118,6 +120,33 @@ get_document_verbatim_round_trip(_Config) ->
                  get_document_verbatim:handle(SourcePath)),
     ?assertEqual({error, not_found},
                  get_document_verbatim:handle(<<"no-such-path.md">>)).
+
+%% Paging has to actually page: barrel's find/3 takes no `offset', and
+%% passing one returns an EMPTY result rather than being ignored, so
+%% every page after the first came back empty and anything walking the
+%% sources saw only page one and believed it had seen everything (live,
+%% 2026-09-02). Asserts the walk both COVERS the ingested documents and
+%% does not repeat one, which a broken offset fails in either direction.
+sources_paging_walks_the_whole_store(_Config) ->
+    Run = fresh_id(),
+    Ids = [<<"page-", Run/binary, "-", (integer_to_binary(N))/binary>> || N <- lists:seq(1, 7)],
+    [{ok, _} = ingest(Id, <<Id/binary, ".md">>, <<"# Page\n\nOne small page fixture.\n">>)
+     || Id <- Ids],
+
+    Walked = walk_sources(0, 2, []),
+    Ours = [Id || Id <- Walked, lists:member(Id, Ids)],
+    ?assertEqual(lists:sort(Ids), lists:sort(Ours)),
+    ?assertEqual(length(Walked), length(lists:usort(Walked))).
+
+%% Pages until a short page, exactly as a mesh caller sweeping the store
+%% does -- a deliberately tiny page size so the walk crosses several.
+walk_sources(Offset, Limit, Acc) ->
+    {ok, Page} = list_sources_page:handle(#{<<"offset">> => Offset, <<"limit">> => Limit}),
+    Ids = Acc ++ [maps:get(document_id, S) || S <- Page],
+    walk_more(length(Page) < Limit, Offset + Limit, Limit, Ids).
+
+walk_more(true, _Offset, _Limit, Acc)  -> Acc;
+walk_more(false, Offset, Limit, Acc)   -> walk_sources(Offset, Limit, Acc).
 
 %% retire_document is prune_chunks plus the source record: afterwards the
 %% document is unknown everywhere, not merely unsearchable -- and a second

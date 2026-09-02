@@ -3,6 +3,20 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.21] - 2026-09-03
+
+### Fixed
+
+- `list_sources_page` could not page: barrel's `find/3` has no `offset`
+  option (`OFFSET` is a BQL keyword), and passing one does not get
+  ignored -- the query returns EMPTY. Every page after the first came
+  back with zero rows, so a store holding more than one page of sources
+  was unlistable past its first `limit`, and anything sweeping the
+  sources saw page one and believed it had seen the whole store. Found
+  by a live cleanup that reported itself complete after 200 of ~300
+  documents. Paging now happens in `rag_store`, which fetches
+  `offset + limit` and drops the offset.
+
 ## [0.1.20] - 2026-09-02
 
 ### Fixed

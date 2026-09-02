@@ -549,12 +549,32 @@ source_content_from_doc(_NotFoundOrNotASource) ->
 find_doc(#{<<"doc">> := Doc}) -> Doc;
 find_doc(Doc)                 -> Doc.
 
+%% barrel's `find' has NO `offset' option -- `OFFSET' is a BQL keyword,
+%% not a find/3 option, and passing one does not merely get ignored: the
+%% query comes back EMPTY. Found live (2026-09-02): every page after the
+%% first returned zero rows, so a store with more than one page of
+%% sources was silently unlistable past its first `Limit', and a sweep
+%% that paged through the sources saw only the first page and reported
+%% itself complete.
+%%
+%% Paging is therefore done here: fetch `Offset + Limit' and drop the
+%% first `Offset'. Linear in the offset, which is honest for a corpus of
+%% a few hundred documents and the reason `list_sources_page' caps
+%% `limit' at 200. barrel's own chunk_size/continuation cursor is the
+%% answer if this ever pages through a corpus large enough for that to
+%% matter -- it needs a cursor on the wire, not an integer offset.
 list_sources_page(Db, Offset, Limit) ->
     Query = #{where => [{path, [<<"type">>], <<"source">>}]},
-    case barrel:find(Db, Query, #{limit => Limit, offset => Offset}) of
-        {ok, Docs, _Meta} -> {ok, [source_row(find_doc(D)) || D <- Docs]};
+    case barrel:find(Db, Query, #{limit => Offset + Limit}) of
+        {ok, Docs, _Meta} -> {ok, [source_row(find_doc(D)) || D <- drop(Offset, Docs)]};
         {error, _} = E    -> E
     end.
+
+%% lists:nthtail/2 fails when the list is shorter than N; a page past the
+%% end is an empty page, not a crash.
+drop(0, L)                          -> L;
+drop(N, L) when length(L) =< N      -> [];
+drop(N, L)                          -> lists:nthtail(N, L).
 
 list_chunks_by_source_page(Db, SourcePath, Limit) ->
     Query = #{where => [{path, [<<"source_path">>], SourcePath}]},
