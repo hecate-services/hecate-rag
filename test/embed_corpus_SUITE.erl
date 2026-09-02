@@ -105,7 +105,8 @@ get_document_verbatim_round_trip(_Config) ->
     Content = <<"# Verbatim\n\nExact bytes, not a semantic approximation.\n">>,
     {ok, _} = ingest(DocId, SourcePath, Content),
 
-    ?assertEqual({ok, #{source_path => SourcePath, raw_bytes => Content}},
+    %% source_path is {text, _}-tagged for the wire; raw_bytes deliberately not.
+    ?assertEqual({ok, #{source_path => {text, SourcePath}, raw_bytes => Content}},
                  get_document_verbatim:handle(SourcePath)),
     ?assertEqual({error, not_found},
                  get_document_verbatim:handle(<<"no-such-path.md">>)).

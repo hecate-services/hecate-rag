@@ -8,7 +8,7 @@
 %%%
 %%%   {topic_classifier, #{
 %%%       enabled  => true | false,       %% default false
-%%%       api_key  => <<"nvapi-...">>,   %% required when enabled
+%%%       api_key  => <<"nvapi-...">>,   %% required when enabled; <<>> = read HECATE_TOPIC_API_KEY
 %%%       endpoint => <<"https://integrate.api.nvidia.com/v1/chat/completions">>,
 %%%       model    => <<"minimaxai/minimax-m3">>,
 %%%       timeout  => 30000               %% ms
@@ -154,5 +154,18 @@ is_valid_topic(T) when is_binary(T) -> byte_size(T) > 0;
 is_valid_topic(T) when is_list(T)   -> length(T) > 0;
 is_valid_topic(_)                   -> false.
 
+%% An empty `api_key' in config falls back to the HECATE_TOPIC_API_KEY
+%% environment variable -- the same name sys.config.src templates in for
+%% the fleet -- so no config file ever has to carry a real key.
 topic_config() ->
-    application:get_env(hecate_rag, topic_classifier, #{}).
+    Config = application:get_env(hecate_rag, topic_classifier, #{}),
+    with_env_api_key(Config, maps:get(api_key, Config, <<>>)).
+
+with_env_api_key(Config, <<>>) ->
+    env_api_key(Config, os:getenv("HECATE_TOPIC_API_KEY"));
+with_env_api_key(Config, _Key) ->
+    Config.
+
+env_api_key(Config, false) -> Config;
+env_api_key(Config, "")    -> Config;
+env_api_key(Config, Key)   -> Config#{api_key => list_to_binary(Key)}.

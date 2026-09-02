@@ -1,6 +1,6 @@
 # Plan: Verbatim retrieval + corpus freshness
 
-**Status:** Deployed on beam03 (v0.1.14). Corpus clone + seeding
+**Status:** Deployed on beam03. Corpus clone + seeding
 verified live via `hecate-rag.list_sources_page` returning real
 `hecate-corpus/*` content. `get_document_verbatim` was blocked by two
 compounding mesh-payload hazards -- atom/binary KEYS (CHANGELOG
@@ -285,7 +285,7 @@ call site.
       `roles/` directory on beam03 (blocked on building+deploying a
       release carrying the NIF, and on `PLAN_RAG_MESH.md` A1/A2 for a
       genuine whole-corpus reseed).
-- [x] `hecate-rag.get_document_verbatim({path: "roles/devops.md"})` returns
+- [x] `hecate-rag.get_document_verbatim({source_path: "hecate-corpus/roles/devops.md"})` returns
       content matching a local `sha256sum` of that file, byte-for-byte —
       proven via `get_document_verbatim_round_trip` against a per-document-ingested
       fixture; not yet run against the real deployed `roles/devops.md`.

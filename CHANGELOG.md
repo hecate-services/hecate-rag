@@ -3,6 +3,26 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.19] - 2026-09-02
+
+### Fixed
+
+- `/health` (and `hecate_rag_service:info/0`) reported `"0.1.14"` on the
+  live 0.1.18 release: the version was a fourth hand-maintained string
+  literal, missed on every bump since 0.1.14. It now reads
+  `application:get_key(hecate_rag, vsn)` -- the `.app.src` value is the
+  one source, and there is no literal left to drift.
+- `config/dev.config` (a tracked file in a public repo) carried a real
+  NVIDIA API key literal for the topic classifier. Removed; the key must
+  be rotated on the provider side. `rag_topic_classifier` now falls back
+  to the `HECATE_TOPIC_API_KEY` environment variable when the config's
+  `api_key` is empty -- the same variable name `sys.config.src` already
+  templates in for the fleet -- so no config file needs a key in it.
+- `hecate-rag.get_document_verbatim`'s `source_path` reached macula-cli /
+  macula-mcp as `0x...` hex: it went out as a bare binary (CBOR byte
+  string). It is now `{text, Bin}`-tagged on the way out. `raw_bytes`
+  deliberately stays a byte string -- it is bytes.
+
 ## [0.1.18] - 2026-09-01
 
 ### Fixed

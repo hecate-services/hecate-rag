@@ -11,9 +11,16 @@
 info() ->
     #{
         name        => <<"hecate-rag">>,
-        version     => <<"0.1.14">>,
+        version     => vsn(),
         description => <<"Realm-bound RAG service: retrieval over the configured corpora">>
     }.
+
+%% The one version string src/hecate_rag.app.src carries -- read from the
+%% loaded application rather than repeated here, so /health can never
+%% report a stale number again (it sat on "0.1.14" through four releases).
+vsn() ->
+    {ok, Vsn} = application:get_key(hecate_rag, vsn),
+    list_to_binary(Vsn).
 
 start(_Opts) ->
     hecate_rag_sup:start_link().
