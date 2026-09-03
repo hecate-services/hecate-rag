@@ -132,6 +132,23 @@ Two consequences of "the caller owns the vector":
   resets the file's watermark, so the next tick retries it instead of
   waiting for the file to change.
 
+### What the git loop does not do: deletions
+
+The scheduler walks the files that exist. A file DELETED from a tracked
+repo keeps its chunks and its source record, and goes on answering
+searches as though it were current guidance -- 33 of them were, found
+live on 2026-09-02, some deleted months earlier.
+
+`hecate-rag.retire_document` is the remedy, and takes such a document
+even when its source record is already gone (`prune_chunks` resolves a
+document through its source record and cannot).
+
+Automatic propagation is deliberately not built yet: "every file this
+repo had is missing from disk" is also what a half-finished clone, an
+empty checkout and a failed `git` look like, and the action it would
+trigger is mass deletion. It needs a guard that distinguishes those
+before it can be trusted to run unattended.
+
 ## Mesh replies are text-tagged at the boundary
 
 A bare binary in a reply encodes as a CBOR byte string, which macula-cli,

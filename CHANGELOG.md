@@ -3,6 +3,29 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.22] - 2026-09-03
+
+### Fixed
+
+- `retire_document` could not remove orphan chunks -- chunks that outlived
+  their source record, or never had one, as the earliest `seed_corpus`
+  wrote chunks only. It resolved the document through `get_source/1` and
+  answered `not_ingested` without a record, and `prune_chunks` does the
+  same, so those chunks could not be removed by any capability at all.
+  Live effect: 33 markdown files deleted from hecate-corpus months ago
+  were still being returned by semantic search as current guidance, with
+  nothing able to retire them. A missing source record is no longer an
+  error here -- the id is taken as the `source_path` and the chunks go.
+
+### Known gap
+
+- Nothing propagates a DELETION from a corpus repo. `refresh_corpus_scheduler`
+  walks the files that exist, so a file removed from a tracked repo keeps
+  its chunks and its source record forever and goes on answering searches.
+  `retire_document` is now the manual remedy. Automatic propagation needs
+  a guard before it can be trusted -- an empty or half-finished clone must
+  never be read as "every document in this repo was deleted".
+
 ## [0.1.21] - 2026-09-03
 
 ### Fixed

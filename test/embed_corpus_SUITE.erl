@@ -15,7 +15,7 @@
 -export([ingest_embed_search_prune_round_trip/1, sources_query_round_trip/1,
          embed_without_ingest_errors/1, seed_corpus_creates_verbatim_source/1,
          get_document_verbatim_round_trip/1, retire_document_round_trip/1,
-         sources_paging_walks_the_whole_store/1,
+         sources_paging_walks_the_whole_store/1, retire_document_takes_orphan_chunks/1,
          refresh_scheduler_detects_and_refreshes_change/1,
          refresh_scheduler_namespaces_by_repo_to_avoid_collisions/1]).
 
@@ -23,7 +23,7 @@ all() ->
     [ingest_embed_search_prune_round_trip, sources_query_round_trip,
      embed_without_ingest_errors, seed_corpus_creates_verbatim_source,
      get_document_verbatim_round_trip, retire_document_round_trip,
-     sources_paging_walks_the_whole_store,
+     sources_paging_walks_the_whole_store, retire_document_takes_orphan_chunks,
      refresh_scheduler_detects_and_refreshes_change,
      refresh_scheduler_namespaces_by_repo_to_avoid_collisions].
 
@@ -120,6 +120,37 @@ get_document_verbatim_round_trip(_Config) ->
                  get_document_verbatim:handle(SourcePath)),
     ?assertEqual({error, not_found},
                  get_document_verbatim:handle(<<"no-such-path.md">>)).
+
+%% Chunks can outlive their source record -- the earliest seed_corpus
+%% wrote chunks with no source at all -- and prune_chunks resolves a
+%% document THROUGH its source record, so those chunks could not be
+%% removed by any capability. Live (2026-09-02): 33 documents deleted
+%% from the corpus months earlier were still answering searches.
+retire_document_takes_orphan_chunks(_Config) ->
+    DocId = fresh_id(),
+    SourcePath = <<"bilby-", DocId/binary, ".md">>,
+    Content = <<"# The Bilby\n\nBilbies are burrowing bandicoots with long "
+                "ears, native to the arid interior of Australia, and they "
+                "dig deep spiral burrows to escape the heat.\n">>,
+    {ok, _} = ingest(DocId, SourcePath, Content),
+    {ok, #{chunks := N}} = embed(DocId),
+    ?assert(N > 0),
+
+    %% Drop the source record only: exactly the shape the old seed left.
+    ok = rag_store:forget_source(DocId),
+    ?assertEqual({error, not_ingested},
+                 maybe_prune_chunks:prune(#{<<"document_id">> => DocId})),
+    {ok, Orphans} = rag_store:list_chunks_by_source(SourcePath, 100),
+    ?assertNotEqual([], Orphans),
+
+    %% The chunks are keyed by source_path, which is what a caller has.
+    ?assertEqual({ok, #{document_id => SourcePath, pruned => length(Orphans)}},
+                 maybe_retire_document:retire(#{<<"document_id">> => SourcePath})),
+    ?assertEqual({ok, []}, rag_store:list_chunks_by_source(SourcePath, 100)),
+    {ok, Hits} = rag_store:search_text(<<"which animal digs spiral burrows">>, 5),
+    ?assertNot(hit_from_source(Hits, SourcePath)),
+    ?assertEqual({error, not_ingested},
+                 maybe_retire_document:retire(#{<<"document_id">> => SourcePath})).
 
 %% Paging has to actually page: barrel's find/3 takes no `offset', and
 %% passing one returns an EMPTY result rather than being ignored, so
