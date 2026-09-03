@@ -3,6 +3,22 @@
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [SemVer](https://semver.org/).
 
+## [0.1.23] - 2026-09-03
+
+### Added
+
+- The topic classifier has a second backend. The primary (NVIDIA,
+  `minimaxai/minimax-m3`) and the fallback (DeepSeek, `deepseek-chat`) are
+  two backends of one shape, tried in that order; a backend without a key
+  is not in the list, so a node holding only `HECATE_TOPIC_FALLBACK_API_KEY`
+  classifies on the fallback alone. The hand-over happens on a failure that
+  is the backend's (429, 5xx, timeout, refused connection, stale key) and
+  is logged; a 400 or 422 is the request's own fault and is not sent
+  again. NVIDIA's free endpoint answered 429 to everything for a day
+  (2026-09-02/03). Found while looking: the classifier had shipped enabled
+  and keyless on the fleet, returning `classifier_not_configured` on every
+  document.
+
 ## [0.1.22] - 2026-09-03
 
 ### Fixed

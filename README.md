@@ -115,7 +115,9 @@ database with HNSW vector indexing. Embedding runs on
 over the mesh (the beam Celerons lack AVX2), reached via `rag_embedder`
 in the caller's process — never inside `rag_store`'s gen_server.
 
-`classify_topics` classifies chunks into topic labels via NVIDIA NIM
+`classify_topics` classifies chunks into topic labels via NVIDIA NIM,
+falling back to DeepSeek when NVIDIA cannot answer (`HECATE_TOPIC_API_KEY`,
+`HECATE_TOPIC_FALLBACK_API_KEY`; either key alone is enough)
 (free tier, OpenAI-compatible API). `search_chunks_semantic` supports
 optional topic filtering. `rerank_results` blends semantic and lexical
 scores. `detect_corpus_change` compares against persisted watermarks.

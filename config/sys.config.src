@@ -33,7 +33,17 @@
             api_key  => <<"${HECATE_TOPIC_API_KEY}">>,
             endpoint => <<"https://integrate.api.nvidia.com/v1/chat/completions">>,
             model    => <<"minimaxai/minimax-m3">>,
-            timeout  => 30000
+            timeout  => 30000,
+            %% The second backend, asked when the first fails for a reason
+            %% that is the backend's (429, 5xx, timeout, refused
+            %% connection, stale key). A node holding only this key
+            %% classifies on it alone. NVIDIA's free endpoint answered
+            %% 429 to everything for a day (2026-09-02/03).
+            fallback => #{
+                api_key  => <<"${HECATE_TOPIC_FALLBACK_API_KEY}">>,
+                endpoint => <<"https://api.deepseek.com/v1/chat/completions">>,
+                model    => <<"deepseek-chat">>
+            }
         }}
     ]},
 
